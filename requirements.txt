@@ -1,0 +1,6 @@
+streamlit
+pandas
+plotly
+google-cloud-language
+sentence-transformers
+scikit-learn

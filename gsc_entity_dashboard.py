@@ -202,33 +202,30 @@ class GSCEntityAnalyzer:
                 query_entities = []
                 query_lower = query.lower().strip()
                 
-                # For each entity found in the mini-batch, check if it PRECISELY belongs to this query
+                # For each entity found in the mini-batch, check if it belongs to this query
                 for entity_key, entity_info in batch_entities.items():
                     entity_name = entity_info['name']
                     entity_name_lower = entity_name.lower().strip()
                     
-                    # RELAXED MATCHING: Entity must appear meaningfully in the query
-                    is_exact_match = False
+                    # MUCH MORE RELAXED MATCHING
+                    is_match = False
                     
-                    # Method 1: Exact entity name match
-                    if entity_name_lower == query_lower:
-                        is_exact_match = True
+                    # Method 1: Direct contains check for most cases
+                    if entity_name_lower in query_lower or query_lower in entity_name_lower:
+                        is_match = True
                     
-                    # Method 2: Entity name appears as complete words in query 
-                    elif len(entity_name_lower) > 2:
-                        # Split entity into words and check if all key words appear
+                    # Method 2: Word-based matching for names and topics
+                    else:
                         entity_words = [w for w in entity_name_lower.split() if len(w) > 2]
                         query_words = query_lower.split()
                         
-                        # If it's a single word entity, just check if it appears
-                        if len(entity_words) == 1:
-                            is_exact_match = entity_words[0] in query_words
-                        # If multi-word, check if most important words appear
-                        elif len(entity_words) > 1:
-                            matches = sum(1 for word in entity_words if word in query_words)
-                            is_exact_match = matches >= len(entity_words) * 0.7  # 70% of words must match
+                        # If any significant entity word appears in query, it's a match
+                        for entity_word in entity_words:
+                            if entity_word in query_words:
+                                is_match = True
+                                break
                     
-                    if is_exact_match:
+                    if is_match:
                         query_entities.append({
                             'entity_name': entity_info['name'],
                             'entity_type': entity_info['type'],
@@ -412,6 +409,14 @@ class GSCEntityAnalyzer:
                 current_val = pivot_data[metric].loc[entity, current_year]
                 previous_val = pivot_data[metric].loc[entity, previous_year]
                 
+                # DEBUG FOR ANSEL ADAMS
+                if entity == 'ansel adams' and metric == 'Clicks':
+                    print(f"\n🔍 DEBUG ANSEL ADAMS CALCULATION:")
+                    print(f"   Entity: {entity}")
+                    print(f"   Current Year ('{current_year}'): {current_val}")
+                    print(f"   Previous Year ('{previous_year}'): {previous_val}")
+                    print(f"   Formula will be: ({current_val} - {previous_val}) / {previous_val} * 100")
+                
                 if metric == 'Position':
                     # For position, negative change means improvement (lower position number is better)
                     changes[f'{metric}_Change'] = previous_val - current_val
@@ -419,6 +424,17 @@ class GSCEntityAnalyzer:
                     # For other metrics, calculate percentage change: (current - previous) / previous * 100
                     if previous_val > 0:
                         changes[f'{metric}_Change_%'] = ((current_val - previous_val) / previous_val) * 100
+                        
+                        # DEBUG FOR ANSEL ADAMS
+                        if entity == 'ansel adams' and metric == 'Clicks':
+                            calculated = changes[f'{metric}_Change_%']
+                            print(f"   Calculated result: {calculated:.1f}%")
+                            if calculated < 0:
+                                print(f"   ❌ NEGATIVE RESULT - THIS IS WRONG!")
+                                print(f"   ❌ Expected positive growth from {previous_val} to {current_val}")
+                            else:
+                                print(f"   ✅ Positive result - correct!")
+                                
                     elif current_val > 0:
                         # If previous was 0 but current has value, that's 100% growth
                         changes[f'{metric}_Change_%'] = 100.0
@@ -449,6 +465,14 @@ class GSCEntityAnalyzer:
                 'Performance_Score': performance_score,
                 **changes
             }
+            
+            # DEBUG: Show what's being stored for Ansel Adams
+            if entity == 'ansel adams':
+                print(f"\n🔍 FINAL RECORD FOR ANSEL ADAMS:")
+                print(f"   Current_Clicks: {yoy_record['Current_Clicks']}")
+                print(f"   Previous_Clicks: {yoy_record['Previous_Clicks']}")
+                print(f"   Clicks_Change_%: {yoy_record['Clicks_Change_%']:.1f}%")
+                print(f"   Performance_Score: {yoy_record['Performance_Score']:.1f}")
             
             yoy_data.append(yoy_record)
         

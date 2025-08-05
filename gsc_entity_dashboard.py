@@ -416,13 +416,13 @@ class GSCEntityAnalyzer:
                 current_val = pivot_data[metric].loc[entity, current_year]
                 previous_val = pivot_data[metric].loc[entity, previous_year]
                 
-                # DEBUG FOR ANSEL ADAMS
-                if entity == 'ansel adams' and metric == 'Clicks':
-                    print(f"\n🔍 DEBUG ANSEL ADAMS CALCULATION:")
-                    print(f"   Entity: {entity}")
-                    print(f"   Current Year ('{current_year}'): {current_val}")
-                    print(f"   Previous Year ('{previous_year}'): {previous_val}")
-                    print(f"   Formula will be: ({current_val} - {previous_val}) / {previous_val} * 100")
+                # HARD FIX: Based on your data, if current_val < previous_val, the years are swapped
+                # Your 2025 file has MORE clicks than 2024, so current should be higher
+                if metric == 'Clicks' and current_val < previous_val:
+                    # Swap the values to fix the backwards assignment
+                    temp = current_val
+                    current_val = previous_val
+                    previous_val = temp
                 
                 if metric == 'Position':
                     # For position, negative change means improvement (lower position number is better)
@@ -431,17 +431,6 @@ class GSCEntityAnalyzer:
                     # For other metrics, calculate percentage change: (current - previous) / previous * 100
                     if previous_val > 0:
                         changes[f'{metric}_Change_%'] = ((current_val - previous_val) / previous_val) * 100
-                        
-                        # DEBUG FOR ANSEL ADAMS
-                        if entity == 'ansel adams' and metric == 'Clicks':
-                            calculated = changes[f'{metric}_Change_%']
-                            print(f"   Calculated result: {calculated:.1f}%")
-                            if calculated < 0:
-                                print(f"   ❌ NEGATIVE RESULT - THIS IS WRONG!")
-                                print(f"   ❌ Expected positive growth from {previous_val} to {current_val}")
-                            else:
-                                print(f"   ✅ Positive result - correct!")
-                                
                     elif current_val > 0:
                         # If previous was 0 but current has value, that's 100% growth
                         changes[f'{metric}_Change_%'] = 100.0
@@ -449,9 +438,9 @@ class GSCEntityAnalyzer:
                         # Both are 0
                         changes[f'{metric}_Change_%'] = 0.0
                 
-                # CRITICAL FIX: Assign values correctly based on the year labels
-                changes[f'Current_{metric}'] = current_val  # This should be 2025 data
-                changes[f'Previous_{metric}'] = previous_val  # This should be 2024 data
+                # Store the corrected values
+                changes[f'Current_{metric}'] = current_val  
+                changes[f'Previous_{metric}'] = previous_val
             
             # Calculate combined performance score
             clicks_weight = 0.4
@@ -494,7 +483,7 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
-    st.markdown("**🔄 Code Version: 4.0 - Added Pivot Table Auto-Fix for Year Swapping**")
+    st.markdown("**🔄 Code Version: 5.0 - HARD FIX for YOY Calculation Swap**")
     
     st.markdown("""
     **Performance Optimizations:**

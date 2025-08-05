@@ -756,13 +756,33 @@ def create_entity_performance_dashboard():
                 
                 with col2:
                     st.markdown("**Related Queries:**")
-                    top_queries = entity_queries.groupby(['Query', 'Year']).agg({
+                    # Show queries from both years for better debugging
+                    entity_queries_detailed = entity_df[entity_df['Entity'] == selected_entity]
+                    
+                    # Group by query and year, then show top queries from each year
+                    queries_by_year = entity_queries_detailed.groupby(['Query', 'Year']).agg({
                         'Clicks': 'sum',
                         'Impressions': 'sum'
-                    }).reset_index().nlargest(5, 'Clicks')
+                    }).reset_index()
                     
+                    # Sort by clicks and show top 5 overall
+                    top_queries = queries_by_year.nlargest(10, 'Clicks')
+                    
+                    st.markdown("**All Related Queries (both years):**")
                     for _, query_row in top_queries.iterrows():
-                        st.markdown(f"- {query_row['Query']} ({query_row['Year']}): {query_row['Clicks']} clicks")
+                        year_icon = "📅" if query_row['Year'] == "Current Year" else "📆"
+                        st.markdown(f"- {year_icon} {query_row['Query']} ({query_row['Year']}): {query_row['Clicks']} clicks, {query_row['Impressions']} impressions")
+                    
+                    # Also show year-specific totals
+                    year_totals = entity_queries_detailed.groupby('Year').agg({
+                        'Clicks': 'sum',
+                        'Impressions': 'sum'
+                    }).reset_index()
+                    
+                    st.markdown("**Entity Totals by Year:**")
+                    for _, total_row in year_totals.iterrows():
+                        year_icon = "📅" if total_row['Year'] == "Current Year" else "📆"
+                        st.markdown(f"- {year_icon} {total_row['Year']}: {total_row['Clicks']} total clicks, {total_row['Impressions']} total impressions")
         
         # Export functionality (moved to bottom to prevent rerun issues)
         st.subheader("💾 Export Results")

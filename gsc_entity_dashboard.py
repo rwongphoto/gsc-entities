@@ -438,6 +438,18 @@ def create_entity_performance_dashboard():
     - ✅ Real-time progress tracking
     """)
     
+    # Initialize session state for persistent data
+    if 'analysis_complete' not in st.session_state:
+        st.session_state.analysis_complete = False
+    if 'entity_df' not in st.session_state:
+        st.session_state.entity_df = None
+    if 'agg_df' not in st.session_state:
+        st.session_state.agg_df = None
+    if 'yoy_df' not in st.session_state:
+        st.session_state.yoy_df = None
+    if 'analyzer' not in st.session_state:
+        st.session_state.analyzer = None
+    
     # Sidebar configuration
     st.sidebar.header("🔑 Configuration")
     
@@ -482,72 +494,107 @@ def create_entity_performance_dashboard():
     # Add caching option
     use_cache = st.sidebar.checkbox("Enable Caching", value=True, help="Cache results to speed up repeated analysis")
     
-    if st.sidebar.button("🚀 Start Analysis", type="primary"):
+    # Analysis button
+    analysis_button = st.sidebar.button("🚀 Start Analysis", type="primary")
+    
+    # Clear results button
+    if st.session_state.analysis_complete:
+        if st.sidebar.button("🗑️ Clear Results", help="Clear current analysis to start fresh"):
+            st.session_state.analysis_complete = False
+            st.session_state.entity_df = None
+            st.session_state.agg_df = None
+            st.session_state.yoy_df = None
+            st.session_state.analyzer = None
+            if 'entity_cache' in st.session_state:
+                st.session_state.entity_cache = {}
+            st.rerun()
+    
+    # Only run analysis if button is clicked and files are uploaded
+    if analysis_button:
         if not current_file or not previous_file:
             st.error("Please upload both current and previous year CSV files")
-            return
-        
-        # Initialize analyzer
-        analyzer = GSCEntityAnalyzer(gcp_credentials_info=gcp_credentials_info)
-        
-        if not analyzer.nlp_client:
-            st.error("❌ Google Cloud NLP client not initialized. Please check your credentials.")
-            return
-        
-        # Load data
-        with st.spinner("Loading GSC data..."):
-            current_df = analyzer.load_gsc_data(current_file, "Current Year")
-            previous_df = analyzer.load_gsc_data(previous_file, "Previous Year")
+        else:
+            # Clear previous results
+            st.session_state.analysis_complete = False
+            st.session_state.entity_df = None
+            st.session_state.agg_df = None
+            st.session_state.yoy_df = None
             
-            if current_df is None or previous_df is None:
-                st.error("Failed to load data files")
+            # Initialize analyzer
+            analyzer = GSCEntityAnalyzer(gcp_credentials_info=gcp_credentials_info)
+            st.session_state.analyzer = analyzer
+            
+            if not analyzer.nlp_client:
+                st.error("❌ Google Cloud NLP client not initialized. Please check your credentials.")
                 return
             
-            # Apply filters
-            current_df = current_df[
-                (current_df['Clicks'] >= min_clicks) & 
-                (current_df['Impressions'] >= min_impressions)
-            ]
-            previous_df = previous_df[
-                (previous_df['Clicks'] >= min_clicks) & 
-                (previous_df['Impressions'] >= min_impressions)
-            ]
-            
-            combined_df = pd.concat([current_df, previous_df], ignore_index=True)
-        
-        # Extract entities (with caching)
-        cache_key = f"{hash(str(combined_df['Top queries'].tolist()))}_batch{batch_size}"
-        
-        if use_cache and 'entity_cache' in st.session_state and cache_key in st.session_state.entity_cache:
-            st.info("📦 Using cached entity extraction results...")
-            entity_df = st.session_state.entity_cache[cache_key]
-        else:
-            with st.spinner("Extracting entities using Google Cloud NLP..."):
-                entity_df = analyzer.extract_entities_from_queries(combined_df, batch_size=batch_size)
+            # Load data
+            with st.spinner("Loading GSC data..."):
+                current_df = analyzer.load_gsc_data(current_file, "Current Year")
+                previous_df = analyzer.load_gsc_data(previous_file, "Previous Year")
                 
-                if entity_df.empty:
-                    st.error("No entities were extracted. Please check your data and credentials.")
+                if current_df is None or previous_df is None:
+                    st.error("Failed to load data files")
                     return
                 
-                # Cache results
-                if use_cache:
-                    if 'entity_cache' not in st.session_state:
-                        st.session_state.entity_cache = {}
-                    st.session_state.entity_cache[cache_key] = entity_df
-        
-        # Aggregate and calculate YOY changes
-        with st.spinner("Calculating YOY performance changes..."):
-            agg_df = analyzer.aggregate_entity_performance(entity_df)
-            yoy_df = analyzer.calculate_yoy_changes(agg_df)
+                # Apply filters
+                current_df = current_df[
+                    (current_df['Clicks'] >= min_clicks) & 
+                    (current_df['Impressions'] >= min_impressions)
+                ]
+                previous_df = previous_df[
+                    (previous_df['Clicks'] >= min_clicks) & 
+                    (previous_df['Impressions'] >= min_impressions)
+                ]
+                
+                combined_df = pd.concat([current_df, previous_df], ignore_index=True)
             
-            if yoy_df is None:
-                st.error("Unable to calculate YOY changes - need data from both years")
-                return
-        
-        # Display Results
-        st.success(f"✅ Analysis complete! Found {len(yoy_df)} entities across {len(entity_df)} query-entity mappings")
+            # Extract entities (with caching)
+            cache_key = f"{hash(str(combined_df['Top queries'].tolist()))}_batch{batch_size}"
+            
+            if use_cache and 'entity_cache' in st.session_state and cache_key in st.session_state.entity_cache:
+                st.info("📦 Using cached entity extraction results...")
+                entity_df = st.session_state.entity_cache[cache_key]
+            else:
+                with st.spinner("Extracting entities using Google Cloud NLP..."):
+                    entity_df = analyzer.extract_entities_from_queries(combined_df, batch_size=batch_size)
+                    
+                    if entity_df.empty:
+                        st.error("No entities were extracted. Please check your data and credentials.")
+                        return
+                    
+                    # Cache results
+                    if use_cache:
+                        if 'entity_cache' not in st.session_state:
+                            st.session_state.entity_cache = {}
+                        st.session_state.entity_cache[cache_key] = entity_df
+            
+            # Store in session state
+            st.session_state.entity_df = entity_df
+            
+            # Aggregate and calculate YOY changes
+            with st.spinner("Calculating YOY performance changes..."):
+                agg_df = analyzer.aggregate_entity_performance(entity_df)
+                yoy_df = analyzer.calculate_yoy_changes(agg_df)
+                
+                if yoy_df is None:
+                    st.error("Unable to calculate YOY changes - need data from both years")
+                    return
+            
+            # Store results in session state
+            st.session_state.agg_df = agg_df
+            st.session_state.yoy_df = yoy_df
+            st.session_state.analysis_complete = True
+            
+            st.success(f"✅ Analysis complete! Found {len(yoy_df)} entities across {len(entity_df)} query-entity mappings")
+    
+    # Display Results (only if analysis is complete)
+    if st.session_state.analysis_complete and st.session_state.yoy_df is not None:
+        yoy_df = st.session_state.yoy_df
+        entity_df = st.session_state.entity_df
         
         # Key Metrics Overview
+        st.subheader("📊 Analysis Overview")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -566,125 +613,169 @@ def create_entity_performance_dashboard():
             avg_impressions_change = yoy_df['Impressions_Change_%'].mean()
             st.metric("Avg Impressions Change", f"{avg_impressions_change:.1f}%")
         
+        # Filters for results (these won't trigger rerun now)
+        st.subheader("🔍 Filter Results")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            entity_types = ['All'] + sorted(yoy_df['Entity_Type'].unique().tolist())
+            selected_type = st.selectbox("Filter by Entity Type:", entity_types, key="entity_type_filter")
+        
+        with col2:
+            min_performance = st.slider(
+                "Minimum Performance Score:", 
+                float(yoy_df['Performance_Score'].min()), 
+                float(yoy_df['Performance_Score'].max()), 
+                float(yoy_df['Performance_Score'].min()),
+                key="performance_filter"
+            )
+        
+        with col3:
+            min_current_clicks = st.slider(
+                "Minimum Current Clicks:", 
+                0, 
+                int(yoy_df['Current_Clicks'].max()), 
+                0,
+                key="clicks_filter"
+            )
+        
+        # Apply filters
+        filtered_df = yoy_df.copy()
+        if selected_type != 'All':
+            filtered_df = filtered_df[filtered_df['Entity_Type'] == selected_type]
+        filtered_df = filtered_df[
+            (filtered_df['Performance_Score'] >= min_performance) & 
+            (filtered_df['Current_Clicks'] >= min_current_clicks)
+        ]
+        
         # Top Performers Table
         st.subheader("🏆 Top Performing Entities YOY")
-        top_performers = yoy_df.nlargest(10, 'Performance_Score')[
-            ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Change_%', 
-             'Impressions_Change_%', 'CTR_Change_%', 'Current_Clicks']
-        ].round(2)
-        
-        st.dataframe(
-            top_performers,
-            use_container_width=True,
-            column_config={
-                "Performance_Score": st.column_config.ProgressColumn(
-                    "Performance Score",
-                    format="%.1f",
-                    min_value=-100,
-                    max_value=100,
-                ),
-                "Clicks_Change_%": st.column_config.ProgressColumn(
-                    "Clicks Change %",
-                    format="%.1f%%",
-                    min_value=-100,
-                    max_value=200,
-                ),
-                "Impressions_Change_%": st.column_config.ProgressColumn(
-                    "Impressions Change %",
-                    format="%.1f%%", 
-                    min_value=-100,
-                    max_value=200,
-                ),
-            }
-        )
+        if len(filtered_df) > 0:
+            top_performers = filtered_df.nlargest(10, 'Performance_Score')[
+                ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Change_%', 
+                 'Impressions_Change_%', 'CTR_Change_%', 'Current_Clicks']
+            ].round(2)
+            
+            st.dataframe(
+                top_performers,
+                use_container_width=True,
+                column_config={
+                    "Performance_Score": st.column_config.ProgressColumn(
+                        "Performance Score",
+                        format="%.1f",
+                        min_value=-100,
+                        max_value=100,
+                    ),
+                    "Clicks_Change_%": st.column_config.ProgressColumn(
+                        "Clicks Change %",
+                        format="%.1f%%",
+                        min_value=-100,
+                        max_value=200,
+                    ),
+                    "Impressions_Change_%": st.column_config.ProgressColumn(
+                        "Impressions Change %",
+                        format="%.1f%%", 
+                        min_value=-100,
+                        max_value=200,
+                    ),
+                }
+            )
+        else:
+            st.info("No entities match the current filters.")
         
         # Declining Entities
         st.subheader("⚠️ Declining Entities - Optimization Opportunities")
-        declining = yoy_df.nsmallest(10, 'Performance_Score')[
-            ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Change_%', 
-             'Previous_Clicks', 'Current_Clicks']
-        ].round(2)
-        
-        st.dataframe(declining, use_container_width=True)
+        if len(filtered_df) > 0:
+            declining = filtered_df.nsmallest(10, 'Performance_Score')[
+                ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Change_%', 
+                 'Previous_Clicks', 'Current_Clicks']
+            ].round(2)
+            
+            st.dataframe(declining, use_container_width=True)
         
         # Visualizations
         st.subheader("📊 Entity Performance Visualizations")
         
-        # Performance Score Distribution
-        fig_dist = px.histogram(
-            yoy_df, 
-            x='Performance_Score',
-            title="Entity Performance Score Distribution",
-            nbins=30,
-            color_discrete_sequence=['#1f77b4']
-        )
-        fig_dist.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="Break-even")
-        st.plotly_chart(fig_dist, use_container_width=True)
-        
-        # Entity Type Performance
-        entity_type_perf = yoy_df.groupby('Entity_Type').agg({
-            'Performance_Score': 'mean',
-            'Clicks_Change_%': 'mean',
-            'Entity': 'count'
-        }).reset_index().rename(columns={'Entity': 'Count'})
-        
-        fig_type = px.scatter(
-            entity_type_perf,
-            x='Clicks_Change_%',
-            y='Performance_Score',
-            size='Count',
-            hover_name='Entity_Type',
-            title="Performance by Entity Type",
-            labels={'Clicks_Change_%': 'Average Clicks Change %', 'Performance_Score': 'Average Performance Score'}
-        )
-        st.plotly_chart(fig_type, use_container_width=True)
+        if len(filtered_df) > 0:
+            # Performance Score Distribution
+            fig_dist = px.histogram(
+                filtered_df, 
+                x='Performance_Score',
+                title="Entity Performance Score Distribution (Filtered)",
+                nbins=30,
+                color_discrete_sequence=['#1f77b4']
+            )
+            fig_dist.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="Break-even")
+            st.plotly_chart(fig_dist, use_container_width=True)
+            
+            # Entity Type Performance
+            if len(filtered_df['Entity_Type'].unique()) > 1:
+                entity_type_perf = filtered_df.groupby('Entity_Type').agg({
+                    'Performance_Score': 'mean',
+                    'Clicks_Change_%': 'mean',
+                    'Entity': 'count'
+                }).reset_index().rename(columns={'Entity': 'Count'})
+                
+                fig_type = px.scatter(
+                    entity_type_perf,
+                    x='Clicks_Change_%',
+                    y='Performance_Score',
+                    size='Count',
+                    hover_name='Entity_Type',
+                    title="Performance by Entity Type (Filtered)",
+                    labels={'Clicks_Change_%': 'Average Clicks Change %', 'Performance_Score': 'Average Performance Score'}
+                )
+                st.plotly_chart(fig_type, use_container_width=True)
         
         # Detailed Entity Analysis
         st.subheader("🔍 Detailed Entity Analysis")
         
-        selected_entity = st.selectbox(
-            "Select an entity for detailed analysis:",
-            options=yoy_df['Entity'].tolist()
-        )
-        
-        if selected_entity:
-            entity_details = yoy_df[yoy_df['Entity'] == selected_entity].iloc[0]
-            entity_queries = entity_df[entity_df['Entity'] == selected_entity]
+        if len(filtered_df) > 0:
+            selected_entity = st.selectbox(
+                "Select an entity for detailed analysis:",
+                options=filtered_df['Entity'].tolist(),
+                key="entity_detail_selector"
+            )
             
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown(f"**Entity:** {selected_entity}")
-                st.markdown(f"**Type:** {entity_details['Entity_Type']}")
-                st.markdown(f"**Performance Score:** {entity_details['Performance_Score']:.2f}")
+            if selected_entity:
+                entity_details = yoy_df[yoy_df['Entity'] == selected_entity].iloc[0]
+                entity_queries = entity_df[entity_df['Entity'] == selected_entity]
                 
-                st.markdown("**YOY Changes:**")
-                st.markdown(f"- Clicks: {entity_details['Clicks_Change_%']:.1f}%")
-                st.markdown(f"- Impressions: {entity_details['Impressions_Change_%']:.1f}%")
-                st.markdown(f"- CTR: {entity_details['CTR_Change_%']:.1f}%")
-                st.markdown(f"- Position: {entity_details['Position_Change']:.2f}")
-            
-            with col2:
-                st.markdown("**Related Queries:**")
-                top_queries = entity_queries.groupby(['Query', 'Year']).agg({
-                    'Clicks': 'sum',
-                    'Impressions': 'sum'
-                }).reset_index().nlargest(5, 'Clicks')
+                col1, col2 = st.columns(2)
                 
-                for _, query_row in top_queries.iterrows():
-                    st.markdown(f"- {query_row['Query']} ({query_row['Year']}): {query_row['Clicks']} clicks")
+                with col1:
+                    st.markdown(f"**Entity:** {selected_entity}")
+                    st.markdown(f"**Type:** {entity_details['Entity_Type']}")
+                    st.markdown(f"**Performance Score:** {entity_details['Performance_Score']:.2f}")
+                    
+                    st.markdown("**YOY Changes:**")
+                    st.markdown(f"- Clicks: {entity_details['Clicks_Change_%']:.1f}%")
+                    st.markdown(f"- Impressions: {entity_details['Impressions_Change_%']:.1f}%")
+                    st.markdown(f"- CTR: {entity_details['CTR_Change_%']:.1f}%")
+                    st.markdown(f"- Position: {entity_details['Position_Change']:.2f}")
+                
+                with col2:
+                    st.markdown("**Related Queries:**")
+                    top_queries = entity_queries.groupby(['Query', 'Year']).agg({
+                        'Clicks': 'sum',
+                        'Impressions': 'sum'
+                    }).reset_index().nlargest(5, 'Clicks')
+                    
+                    for _, query_row in top_queries.iterrows():
+                        st.markdown(f"- {query_row['Query']} ({query_row['Year']}): {query_row['Clicks']} clicks")
         
-        # Export functionality
+        # Export functionality (moved to bottom to prevent rerun issues)
         st.subheader("💾 Export Results")
         
         col1, col2 = st.columns(2)
         with col1:
-            csv_data = yoy_df.to_csv(index=False)
+            csv_data = filtered_df.to_csv(index=False)
             st.download_button(
-                label="📥 Download YOY Analysis CSV",
+                label="📥 Download Filtered YOY Analysis CSV",
                 data=csv_data,
-                file_name=f"entity_yoy_analysis_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
+                file_name=f"entity_yoy_analysis_filtered_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                key="download_yoy"
             )
         
         with col2:
@@ -693,8 +784,12 @@ def create_entity_performance_dashboard():
                 label="📥 Download Entity Mappings CSV", 
                 data=entity_csv,
                 file_name=f"entity_query_mappings_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
+                mime="text/csv",
+                key="download_entity"
             )
+    
+    elif not st.session_state.analysis_complete:
+        st.info("👆 Please upload your GSC data files and click 'Start Analysis' to begin.")
 
 if __name__ == "__main__":
     create_entity_performance_dashboard()

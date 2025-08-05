@@ -296,7 +296,11 @@ class GSCEntityAnalyzer:
     
     def aggregate_entity_performance(self, entity_df):
         """Aggregate performance metrics by entity and year."""
-        return entity_df.groupby(['Entity', 'Entity_Type', 'Year']).agg({
+        # First, handle potential duplicates by creating a unique entity identifier
+        entity_df['Entity_Unique'] = entity_df['Entity'] + '_' + entity_df['Entity_Type']
+        
+        # Aggregate by the unique entity identifier
+        agg_df = entity_df.groupby(['Entity_Unique', 'Entity', 'Entity_Type', 'Year']).agg({
             'Clicks': 'sum',
             'Impressions': 'sum',
             'CTR': 'mean',
@@ -305,14 +309,58 @@ class GSCEntityAnalyzer:
             'Query_Relevance': 'mean',
             'Query': 'count'
         }).rename(columns={'Query': 'Query_Count'}).reset_index()
+        
+        # If there are still Entity-Year duplicates, resolve them by taking the one with higher clicks
+        duplicates = agg_df.groupby(['Entity', 'Year']).size()
+        if (duplicates > 1).any():
+            print(f"⚠️ Found {(duplicates > 1).sum()} entities with multiple types. Resolving by highest performance...")
+            # Keep the version with highest clicks for each Entity-Year combination
+            agg_df = agg_df.loc[agg_df.groupby(['Entity', 'Year'])['Clicks'].idxmax()].reset_index(drop=True)
+        
+        return agg_df
     
     def calculate_yoy_changes(self, agg_df):
         """Calculate year-over-year changes for each entity."""
+        # Debug: Check for duplicates before pivoting
+        duplicate_check = agg_df.groupby(['Entity', 'Year']).size()
+        if (duplicate_check > 1).any():
+            print(f"❌ Found duplicate Entity-Year combinations:")
+            duplicates = duplicate_check[duplicate_check > 1]
+            for (entity, year), count in duplicates.items():
+                print(f"   {entity} ({year}): {count} entries")
+            
+            # Show the duplicate entries
+            duplicate_entities = duplicates.index.get_level_values('Entity').unique()
+            print("Duplicate entries:")
+            print(agg_df[agg_df['Entity'].isin(duplicate_entities)][['Entity', 'Entity_Type', 'Year', 'Clicks']])
+            
+            # Try to resolve by keeping highest clicks
+            print("🔧 Attempting to resolve duplicates by keeping highest-performing entries...")
+            agg_df = agg_df.loc[agg_df.groupby(['Entity', 'Year'])['Clicks'].idxmax()].reset_index(drop=True)
+            
+            # Recheck
+            duplicate_check_after = agg_df.groupby(['Entity', 'Year']).size()
+            if (duplicate_check_after > 1).any():
+                print("❌ Still have duplicates after resolution. Cannot proceed with pivot.")
+                return None
+            else:
+                print("✅ Duplicates resolved successfully")
+        
         pivot_data = {}
         metrics = ['Clicks', 'Impressions', 'CTR', 'Position', 'Query_Count']
         
-        for metric in metrics:
-            pivot_data[metric] = agg_df.pivot(index='Entity', columns='Year', values=metric).fillna(0)
+        try:
+            for metric in metrics:
+                pivot_data[metric] = agg_df.pivot(index='Entity', columns='Year', values=metric).fillna(0)
+        except ValueError as e:
+            print(f"❌ Pivot error: {e}")
+            print("Available data structure:")
+            print(f"Unique entities: {agg_df['Entity'].nunique()}")
+            print(f"Unique years: {agg_df['Year'].nunique()}")
+            print(f"Total rows: {len(agg_df)}")
+            print("Sample data:")
+            print(agg_df[['Entity', 'Year', 'Clicks']].head(10))
+            return None
         
         years = pivot_data['Clicks'].columns.tolist()
         if len(years) < 2:
@@ -320,11 +368,13 @@ class GSCEntityAnalyzer:
             return None
         
         current_year, previous_year = sorted(years)[-1], sorted(years)[-2]
+        print(f"📊 Comparing {previous_year} vs {current_year}")
         
         yoy_data = []
         for entity in pivot_data['Clicks'].index:
-            # Get entity type
-            entity_type = agg_df[agg_df['Entity'] == entity]['Entity_Type'].iloc[0] if len(agg_df[agg_df['Entity'] == entity]) > 0 else 'UNKNOWN'
+            # Get entity type (safely)
+            entity_type_series = agg_df[agg_df['Entity'] == entity]['Entity_Type']
+            entity_type = entity_type_series.iloc[0] if len(entity_type_series) > 0 else 'UNKNOWN'
             
             # Calculate changes for each metric
             changes = {}
@@ -367,7 +417,9 @@ class GSCEntityAnalyzer:
             
             yoy_data.append(yoy_record)
         
-        return pd.DataFrame(yoy_data)
+        result_df = pd.DataFrame(yoy_data)
+        print(f"✅ YOY analysis complete for {len(result_df)} entities")
+        return result_df
 
 def create_entity_performance_dashboard():
     """Create a Streamlit dashboard for GSC entity performance analysis."""

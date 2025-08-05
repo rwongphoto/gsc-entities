@@ -217,7 +217,7 @@ class GSCEntityAnalyzer:
             # Update progress
             progress_placeholder.progress(
                 processed_count / total_unique,
-                text=f"Processed {processed_count}/{total_unique} unique queries ({progress_percentage:.1f}%)"
+                text=f"🔍 Processed {processed_count}/{total_unique} unique queries ({progress_percentage:.1f}%) - Batch {i//batch_size + 1}"
             )
         
         progress_placeholder.empty()

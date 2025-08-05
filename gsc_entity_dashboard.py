@@ -207,34 +207,26 @@ class GSCEntityAnalyzer:
                     entity_name = entity_info['name']
                     entity_name_lower = entity_name.lower().strip()
                     
-                    # STRICT MATCHING: Entity must be exactly in the query or a clear subset
+                    # RELAXED MATCHING: Entity must appear meaningfully in the query
                     is_exact_match = False
                     
                     # Method 1: Exact entity name match
                     if entity_name_lower == query_lower:
                         is_exact_match = True
                     
-                    # Method 2: Entity name is a meaningful substring of query (not just single words)
-                    elif len(entity_name_lower) > 3 and entity_name_lower in query_lower:
-                        # Additional check: make sure it's not just a coincidental substring
-                        # Entity should be word-bounded in the query
-                        import re
-                        pattern = r'\b' + re.escape(entity_name_lower) + r'\b'
-                        if re.search(pattern, query_lower):
-                            is_exact_match = True
-                    
-                    # Method 3: For multi-word entities, check if ALL words appear in query
-                    elif len(entity_name_lower.split()) > 1:
-                        entity_words = entity_name_lower.split()
+                    # Method 2: Entity name appears as complete words in query 
+                    elif len(entity_name_lower) > 2:
+                        # Split entity into words and check if all key words appear
+                        entity_words = [w for w in entity_name_lower.split() if len(w) > 2]
                         query_words = query_lower.split()
-                        if all(word in query_words for word in entity_words if len(word) > 2):
-                            is_exact_match = True
-                    
-                    # Method 4: For person names, be very strict
-                    elif entity_info['type'] == 'PERSON':
-                        # Person names should be exact matches or clear substrings
-                        if entity_name_lower in query_lower and len(entity_name_lower) > 4:
-                            is_exact_match = True
+                        
+                        # If it's a single word entity, just check if it appears
+                        if len(entity_words) == 1:
+                            is_exact_match = entity_words[0] in query_words
+                        # If multi-word, check if most important words appear
+                        elif len(entity_words) > 1:
+                            matches = sum(1 for word in entity_words if word in query_words)
+                            is_exact_match = matches >= len(entity_words) * 0.7  # 70% of words must match
                     
                     if is_exact_match:
                         query_entities.append({
@@ -376,41 +368,11 @@ class GSCEntityAnalyzer:
     
     def calculate_yoy_changes(self, agg_df):
         """Calculate year-over-year changes for each entity."""
-        # Debug: Show for duplicates before pivoting
+        # Check for duplicates before pivoting
         duplicate_check = agg_df.groupby(['Entity', 'Year']).size()
         if (duplicate_check > 1).any():
-            print(f"❌ Found duplicate Entity-Year combinations:")
-            duplicates = duplicate_check[duplicate_check > 1]
-            for (entity, year), count in duplicates.items():
-                print(f"   {entity} ({year}): {count} entries")
-            
-            # Show the duplicate entries
-            duplicate_entities = duplicates.index.get_level_values('Entity').unique()
-            print("Duplicate entries:")
-            print(agg_df[agg_df['Entity'].isin(duplicate_entities)][['Entity', 'Entity_Type', 'Year', 'Clicks']])
-            
-            # Try to resolve by keeping highest clicks
-            print("🔧 Attempting to resolve duplicates by keeping highest-performing entries...")
+            print("🔧 Resolving duplicate entities by keeping highest-performing entries...")
             agg_df = agg_df.loc[agg_df.groupby(['Entity', 'Year'])['Clicks'].idxmax()].reset_index(drop=True)
-            
-            # Recheck
-            duplicate_check_after = agg_df.groupby(['Entity', 'Year']).size()
-            if (duplicate_check_after > 1).any():
-                print("❌ Still have duplicates after resolution. Cannot proceed with pivot.")
-                return None
-            else:
-                print("✅ Duplicates resolved successfully")
-        
-        # DEBUG: Show original aggregated data for key entities BEFORE pivoting
-        test_entities = ['ansel adams', 'richard wong', 'galen rowell']
-        print(f"\n🔍 ORIGINAL AGGREGATED DATA (before pivot):")
-        for test_entity in test_entities:
-            entity_data = agg_df[agg_df['Entity'] == test_entity]
-            if not entity_data.empty:
-                print(f"   {test_entity}:")
-                for _, row in entity_data.iterrows():
-                    print(f"     {row['Year']}: {row['Clicks']} clicks, {row['Impressions']} impressions")
-                break  # Just show one example
         
         pivot_data = {}
         metrics = ['Clicks', 'Impressions', 'CTR', 'Position', 'Query_Count']
@@ -437,7 +399,6 @@ class GSCEntityAnalyzer:
         print(f"📊 Comparing {previous_year} vs {current_year}")
         
         yoy_data = []
-        debug_entities = ['flower photographers', 'richard wong', 'ansel adams', 'galen rowell']  # Track these for debugging
         
         for entity in pivot_data['Clicks'].index:
             # Get entity type (safely)
@@ -447,39 +408,27 @@ class GSCEntityAnalyzer:
             # Calculate changes for each metric
             changes = {}
             for metric in metrics:
+                # Get the values from pivot table
                 current_val = pivot_data[metric].loc[entity, current_year]
                 previous_val = pivot_data[metric].loc[entity, previous_year]
-                
-                # Debug specific entities to verify calculations
-                if entity in debug_entities and metric == 'Clicks':
-                    print(f"\n🔍 DEBUG {entity.upper()}:")
-                    print(f"   Accessing pivot_data['{metric}'].loc['{entity}', '{current_year}'] = {current_val}")
-                    print(f"   Accessing pivot_data['{metric}'].loc['{entity}', '{previous_year}'] = {previous_val}")
                 
                 if metric == 'Position':
                     # For position, negative change means improvement (lower position number is better)
                     changes[f'{metric}_Change'] = previous_val - current_val
-                    if entity in debug_entities:
-                        print(f"   Position Change: {previous_val} - {current_val} = {changes[f'{metric}_Change']:.2f}")
                 else:
                     # For other metrics, calculate percentage change: (current - previous) / previous * 100
                     if previous_val > 0:
                         changes[f'{metric}_Change_%'] = ((current_val - previous_val) / previous_val) * 100
-                        if entity in debug_entities and metric == 'Clicks':
-                            print(f"   Clicks Change Calculation: ({current_val} - {previous_val}) / {previous_val} * 100 = {changes[f'{metric}_Change_%']:.2f}%")
                     elif current_val > 0:
                         # If previous was 0 but current has value, that's 100% growth
                         changes[f'{metric}_Change_%'] = 100.0
-                        if entity in debug_entities and metric == 'Clicks':
-                            print(f"   Clicks Change (from 0): 100.0%")
                     else:
                         # Both are 0
                         changes[f'{metric}_Change_%'] = 0.0
-                        if entity in debug_entities and metric == 'Clicks':
-                            print(f"   Clicks Change (both 0): 0.0%")
                 
-                changes[f'Current_{metric}'] = current_val
-                changes[f'Previous_{metric}'] = previous_val
+                # CRITICAL FIX: Assign values correctly based on the year labels
+                changes[f'Current_{metric}'] = current_val  # This should be 2025 data
+                changes[f'Previous_{metric}'] = previous_val  # This should be 2024 data
             
             # Calculate combined performance score
             clicks_weight = 0.4

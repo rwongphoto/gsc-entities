@@ -101,7 +101,7 @@ class GSCEntityAnalyzer:
                 print(f"⚠️ Text truncated to {len(text)} characters for API limits")
 
             # Clean text for better NLP processing
-            text = re.sub(r'\|QUERY_SEPARATOR\|', '. ', text)  # Replace separators with periods
+            text = re.sub(r'\|MINIBATCH_SEPARATOR\|', '. ', text)  # Replace mini-batch separators with periods
             text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
 
             document = language_v1.Document(content=text, type_=language_v1.Document.Type.PLAIN_TEXT)
@@ -154,22 +154,24 @@ class GSCEntityAnalyzer:
             print(f"❌ Error loading {file_path}: {e}")
             return None
     
-    def extract_entities_from_queries(self, df, batch_size=200):
-        """Extract entities from search queries using optimized Google Cloud NLP processing."""
+    def extract_entities_from_queries(self, df, batch_size=5):
+        """Extract entities from search queries using optimized mini-batch processing for accurate entity mapping."""
         if not self.nlp_client:
             print("❌ Google Cloud NLP client not available")
             return pd.DataFrame()
         
-        # Step 1: Deduplicate queries to reduce API calls
+        # Step 1: Get unique queries and prepare for mini-batch processing
         unique_queries = df['Top queries'].unique()
         total_unique = len(unique_queries)
         total_queries = len(df)
         
         print(f"🔍 Processing {total_unique} unique queries from {total_queries} total queries...")
+        print(f"🎯 Using optimized mini-batch approach (batch size: {batch_size}) for accurate entity mapping...")
         
-        # Step 2: Process unique queries in optimized batches
+        # Step 2: Process in mini-batches for accurate entity-to-query mapping
         query_entities_cache = {}
         processed_count = 0
+        api_calls_made = 0
         
         # Create progress bar placeholder
         progress_placeholder = st.empty()
@@ -177,26 +179,54 @@ class GSCEntityAnalyzer:
         for i in range(0, total_unique, batch_size):
             batch_queries = unique_queries[i:i+batch_size]
             
-            # Create a large text block for efficient NLP processing
-            # Use unique separators to later map back to individual queries
-            separator = " |QUERY_SEPARATOR| "
+            # Create mini-batch text with clear separators
+            separator = " |MINIBATCH_SEPARATOR| "
             batch_text = separator.join(batch_queries)
             
-            # Extract entities from the entire batch
+            # Extract entities from this mini-batch
             batch_entities = self.extract_entities_with_google_nlp(batch_text)
+            api_calls_made += 1
             
-            # Map entities back to individual queries efficiently
+            # Now do PRECISE mapping - only associate entities with queries where they actually appear
             for query in batch_queries:
                 query_entities = []
-                query_lower = query.lower()
+                query_lower = query.lower().strip()
                 
-                # Find entities that appear in this specific query
+                # For each entity found in the mini-batch, check if it PRECISELY belongs to this query
                 for entity_key, entity_info in batch_entities.items():
-                    entity_name_lower = entity_info['name'].lower()
+                    entity_name = entity_info['name']
+                    entity_name_lower = entity_name.lower().strip()
                     
-                    # Efficient string matching
-                    if (entity_name_lower in query_lower or 
-                        any(word in query_lower.split() for word in entity_name_lower.split() if len(word) > 2)):
+                    # STRICT MATCHING: Entity must be exactly in the query or a clear subset
+                    is_exact_match = False
+                    
+                    # Method 1: Exact entity name match
+                    if entity_name_lower == query_lower:
+                        is_exact_match = True
+                    
+                    # Method 2: Entity name is a meaningful substring of query (not just single words)
+                    elif len(entity_name_lower) > 3 and entity_name_lower in query_lower:
+                        # Additional check: make sure it's not just a coincidental substring
+                        # Entity should be word-bounded in the query
+                        import re
+                        pattern = r'\b' + re.escape(entity_name_lower) + r'\b'
+                        if re.search(pattern, query_lower):
+                            is_exact_match = True
+                    
+                    # Method 3: For multi-word entities, check if ALL words appear in query
+                    elif len(entity_name_lower.split()) > 1:
+                        entity_words = entity_name_lower.split()
+                        query_words = query_lower.split()
+                        if all(word in query_words for word in entity_words if len(word) > 2):
+                            is_exact_match = True
+                    
+                    # Method 4: For person names, be very strict
+                    elif entity_info['type'] == 'PERSON':
+                        # Person names should be exact matches or clear substrings
+                        if entity_name_lower in query_lower and len(entity_name_lower) > 4:
+                            is_exact_match = True
+                    
+                    if is_exact_match:
                         query_entities.append({
                             'entity_name': entity_info['name'],
                             'entity_type': entity_info['type'],
@@ -204,7 +234,7 @@ class GSCEntityAnalyzer:
                             'mentions': entity_info['mentions']
                         })
                 
-                # Fallback if no entities found
+                # Fallback: If no precise entities found, create a broad category
                 if not query_entities:
                     query_entities = [self._categorize_query_fallback(query)]
                 
@@ -214,16 +244,16 @@ class GSCEntityAnalyzer:
             processed_count += len(batch_queries)
             progress_percentage = (processed_count / total_unique) * 100
             
-            # Update progress
+            # Update progress with API call info
             progress_placeholder.progress(
                 processed_count / total_unique,
-                text=f"🔍 Processed {processed_count}/{total_unique} unique queries ({progress_percentage:.1f}%) - Batch {i//batch_size + 1}"
+                text=f"🎯 Processed {processed_count}/{total_unique} queries ({progress_percentage:.1f}%) | API calls: {api_calls_made}"
             )
         
         progress_placeholder.empty()
         
-        # Step 3: Build final dataset efficiently using cached results
-        print("🔄 Building entity-query mappings...")
+        # Step 3: Build final dataset using precise entity mappings
+        print(f"🔄 Building precise entity-query mappings... (made {api_calls_made} API calls)")
         entity_data = []
         
         # Pre-compute embeddings for unique entities if available
@@ -244,6 +274,9 @@ class GSCEntityAnalyzer:
                     print(f"⚠️ Failed to pre-compute embeddings: {e}")
         
         # Process each row in the original dataframe
+        precise_mappings = 0
+        fallback_mappings = 0
+        
         for idx, row in df.iterrows():
             query = row['Top queries']
             cached_entities = query_entities_cache.get(query, [])
@@ -272,8 +305,20 @@ class GSCEntityAnalyzer:
                     'Position': row['Position'],
                     'Year': row['Year']
                 })
+                
+                # Track mapping quality
+                if entity_info.get('salience', 0) > 0.1:
+                    precise_mappings += 1
+                else:
+                    fallback_mappings += 1
         
-        print(f"✅ Entity extraction complete! Found {len(entity_data)} entity-query mappings from {total_unique} unique queries")
+        print(f"✅ Precise entity analysis complete!")
+        print(f"   📊 Made {api_calls_made} API calls (vs {total_unique} for individual processing)")
+        print(f"   🎯 Found {len(entity_data)} entity-query mappings from {total_unique} unique queries")
+        print(f"   ✅ Precise mappings: {precise_mappings}")
+        print(f"   📂 Fallback categorizations: {fallback_mappings}")
+        print(f"   🚀 Mapping accuracy: {(precise_mappings / (precise_mappings + fallback_mappings) * 100):.1f}%")
+        
         return pd.DataFrame(entity_data)
     
     def _categorize_query_fallback(self, query):
@@ -383,17 +428,26 @@ class GSCEntityAnalyzer:
                 previous_val = pivot_data[metric].loc[entity, previous_year]
                 
                 if metric == 'Position':
-                    # For position, negative change means improvement
+                    # For position, negative change means improvement (lower position number is better)
                     changes[f'{metric}_Change'] = previous_val - current_val
                 else:
-                    # For other metrics, calculate percentage change
+                    # For other metrics, calculate percentage change: (current - previous) / previous * 100
                     if previous_val > 0:
                         changes[f'{metric}_Change_%'] = ((current_val - previous_val) / previous_val) * 100
+                    elif current_val > 0:
+                        # If previous was 0 but current has value, that's 100% growth
+                        changes[f'{metric}_Change_%'] = 100.0
                     else:
-                        changes[f'{metric}_Change_%'] = 100.0 if current_val > 0 else 0.0
+                        # Both are 0
+                        changes[f'{metric}_Change_%'] = 0.0
                 
                 changes[f'Current_{metric}'] = current_val
                 changes[f'Previous_{metric}'] = previous_val
+                
+                # Debug: Log the calculation for verification
+                if metric == 'Clicks' and entity in ['flower photographers', 'ansel adams', 'richard wong']:
+                    calc_result = changes[f'{metric}_Change_%']
+                    print(f"   📊 {entity} {metric}: {previous_val} → {current_val} = {calc_result:.1f}%")
             
             # Calculate combined performance score
             clicks_weight = 0.4
@@ -489,7 +543,7 @@ def create_entity_performance_dashboard():
     st.sidebar.subheader("⚙️ Analysis Settings")
     min_clicks = st.sidebar.slider("Minimum Clicks Filter", 0, 100, 10)
     min_impressions = st.sidebar.slider("Minimum Impressions Filter", 0, 1000, 50)
-    batch_size = st.sidebar.slider("NLP Batch Size", 100, 500, 200)
+    batch_size = st.sidebar.slider("Mini-Batch Size", 3, 10, 5, help="Number of queries per API call (smaller = more precise)")
     
     # Add caching option
     use_cache = st.sidebar.checkbox("Enable Caching", value=True, help="Cache results to speed up repeated analysis")

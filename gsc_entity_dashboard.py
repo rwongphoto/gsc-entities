@@ -376,7 +376,7 @@ class GSCEntityAnalyzer:
     
     def calculate_yoy_changes(self, agg_df):
         """Calculate year-over-year changes for each entity."""
-        # Debug: Check for duplicates before pivoting
+        # Debug: Show for duplicates before pivoting
         duplicate_check = agg_df.groupby(['Entity', 'Year']).size()
         if (duplicate_check > 1).any():
             print(f"❌ Found duplicate Entity-Year combinations:")
@@ -400,6 +400,17 @@ class GSCEntityAnalyzer:
                 return None
             else:
                 print("✅ Duplicates resolved successfully")
+        
+        # DEBUG: Show original aggregated data for key entities BEFORE pivoting
+        test_entities = ['ansel adams', 'richard wong', 'galen rowell']
+        print(f"\n🔍 ORIGINAL AGGREGATED DATA (before pivot):")
+        for test_entity in test_entities:
+            entity_data = agg_df[agg_df['Entity'] == test_entity]
+            if not entity_data.empty:
+                print(f"   {test_entity}:")
+                for _, row in entity_data.iterrows():
+                    print(f"     {row['Year']}: {row['Clicks']} clicks, {row['Impressions']} impressions")
+                break  # Just show one example
         
         pivot_data = {}
         metrics = ['Clicks', 'Impressions', 'CTR', 'Position', 'Query_Count']

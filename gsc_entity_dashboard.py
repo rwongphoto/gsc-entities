@@ -487,6 +487,7 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
+    st.markdown("**🔄 Code Version: 3.0 - Fixed Entity Matching & YOY Calculations**")
     
     st.markdown("""
     **Performance Optimizations:**
@@ -558,7 +559,7 @@ def create_entity_performance_dashboard():
     
     # Clear results button
     if st.session_state.analysis_complete:
-        if st.sidebar.button("🗑️ Clear Results", help="Clear current analysis to start fresh"):
+        if st.sidebar.button("🗑️ Clear Results & Use New Code", help="Clear current analysis to see code updates"):
             st.session_state.analysis_complete = False
             st.session_state.entity_df = None
             st.session_state.agg_df = None
@@ -566,6 +567,7 @@ def create_entity_performance_dashboard():
             st.session_state.analyzer = None
             if 'entity_cache' in st.session_state:
                 st.session_state.entity_cache = {}
+            st.success("✅ Cache cleared! Run analysis again to see new code changes.")
             st.rerun()
     
     # Only run analysis if button is clicked and files are uploaded

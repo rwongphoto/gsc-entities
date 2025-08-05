@@ -94,11 +94,15 @@ class GSCEntityAnalyzer:
 
         try:
             # Handle text size limits (Google NLP API limit)
-            max_bytes = 900000
+            max_bytes = 800000  # Leave some buffer
             text_bytes = text.encode('utf-8')
             if len(text_bytes) > max_bytes:
                 text = text_bytes[:max_bytes].decode('utf-8', 'ignore')
-                print(f"⚠️ Text truncated to fit Google NLP API size limit")
+                print(f"⚠️ Text truncated to {len(text)} characters for API limits")
+
+            # Clean text for better NLP processing
+            text = re.sub(r'\|QUERY_SEPARATOR\|', '. ', text)  # Replace separators with periods
+            text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
 
             document = language_v1.Document(content=text, type_=language_v1.Document.Type.PLAIN_TEXT)
             response = self.nlp_client.analyze_entities(document=document, encoding_type=language_v1.EncodingType.UTF8)
@@ -107,8 +111,8 @@ class GSCEntityAnalyzer:
             for entity in response.entities:
                 entity_name = entity.name.strip()
 
-                # Filter out number entities
-                if self.is_number_entity(entity_name):
+                # Filter out number entities and very short entities
+                if self.is_number_entity(entity_name) or len(entity_name) < 2:
                     continue
 
                 key = entity_name.lower()
@@ -150,76 +154,126 @@ class GSCEntityAnalyzer:
             print(f"❌ Error loading {file_path}: {e}")
             return None
     
-    def extract_entities_from_queries(self, df, batch_size=50):
-        """Extract entities from search queries using Google Cloud NLP."""
+    def extract_entities_from_queries(self, df, batch_size=200):
+        """Extract entities from search queries using optimized Google Cloud NLP processing."""
         if not self.nlp_client:
             print("❌ Google Cloud NLP client not available")
             return pd.DataFrame()
         
-        entity_data = []
+        # Step 1: Deduplicate queries to reduce API calls
+        unique_queries = df['Top queries'].unique()
+        total_unique = len(unique_queries)
         total_queries = len(df)
         
-        print(f"🔍 Extracting entities from {total_queries} queries...")
+        print(f"🔍 Processing {total_unique} unique queries from {total_queries} total queries...")
         
-        # Process queries in batches to optimize API calls
-        for i in range(0, total_queries, batch_size):
-            batch_df = df.iloc[i:i+batch_size]
-            batch_text = ". ".join(batch_df['Top queries'].tolist())
+        # Step 2: Process unique queries in optimized batches
+        query_entities_cache = {}
+        processed_count = 0
+        
+        # Create progress bar placeholder
+        progress_placeholder = st.empty()
+        
+        for i in range(0, total_unique, batch_size):
+            batch_queries = unique_queries[i:i+batch_size]
             
-            # Extract entities from the batch
-            entities = self.extract_entities_with_google_nlp(batch_text)
+            # Create a large text block for efficient NLP processing
+            # Use unique separators to later map back to individual queries
+            separator = " |QUERY_SEPARATOR| "
+            batch_text = separator.join(batch_queries)
             
-            # Map entities back to individual queries
-            for idx, row in batch_df.iterrows():
-                query = row['Top queries']
+            # Extract entities from the entire batch
+            batch_entities = self.extract_entities_with_google_nlp(batch_text)
+            
+            # Map entities back to individual queries efficiently
+            for query in batch_queries:
                 query_entities = []
+                query_lower = query.lower()
                 
-                # Find which entities appear in this specific query
-                for entity_key, entity_info in entities.items():
-                    entity_name = entity_info['name'].lower()
-                    if entity_name in query or any(word in query.split() for word in entity_name.split()):
+                # Find entities that appear in this specific query
+                for entity_key, entity_info in batch_entities.items():
+                    entity_name_lower = entity_info['name'].lower()
+                    
+                    # Efficient string matching
+                    if (entity_name_lower in query_lower or 
+                        any(word in query_lower.split() for word in entity_name_lower.split() if len(word) > 2)):
                         query_entities.append({
-                            'entity_key': entity_key,
                             'entity_name': entity_info['name'],
                             'entity_type': entity_info['type'],
                             'salience': entity_info['salience'],
                             'mentions': entity_info['mentions']
                         })
                 
-                # If no specific entities found, create a fallback categorization
+                # Fallback if no entities found
                 if not query_entities:
                     query_entities = [self._categorize_query_fallback(query)]
                 
-                # Create records for each entity found in the query
-                for entity_info in query_entities:
-                    # Calculate query relevance if embedding model is available
-                    query_relevance = 0.0
-                    if self.embedding_model:
-                        try:
-                            query_embedding = self.embedding_model.encode([query])
-                            entity_embedding = self.embedding_model.encode([entity_info['entity_name']])
-                            query_relevance = cosine_similarity(query_embedding, entity_embedding)[0][0]
-                        except:
-                            pass
-                    
-                    entity_data.append({
-                        'Query': query,
-                        'Entity': entity_info['entity_name'],
-                        'Entity_Type': entity_info['entity_type'],
-                        'Entity_Salience': entity_info.get('salience', 0.0),
-                        'Entity_Mentions': entity_info.get('mentions', 1),
-                        'Query_Relevance': query_relevance,
-                        'Clicks': row['Clicks'],
-                        'Impressions': row['Impressions'],
-                        'CTR': row['CTR'],
-                        'Position': row['Position'],
-                        'Year': row['Year']
-                    })
+                # Cache the results
+                query_entities_cache[query] = query_entities
             
-            if (i + batch_size) % 200 == 0:
-                print(f"   Processed {min(i + batch_size, total_queries)}/{total_queries} queries")
+            processed_count += len(batch_queries)
+            progress_percentage = (processed_count / total_unique) * 100
+            
+            # Update progress
+            progress_placeholder.progress(
+                processed_count / total_unique,
+                text=f"Processed {processed_count}/{total_unique} unique queries ({progress_percentage:.1f}%)"
+            )
         
-        print(f"✅ Entity extraction complete! Found {len(entity_data)} entity-query mappings")
+        progress_placeholder.empty()
+        
+        # Step 3: Build final dataset efficiently using cached results
+        print("🔄 Building entity-query mappings...")
+        entity_data = []
+        
+        # Pre-compute embeddings for unique entities if available
+        entity_embeddings_cache = {}
+        if self.embedding_model:
+            all_entities = set()
+            for entities_list in query_entities_cache.values():
+                for entity in entities_list:
+                    all_entities.add(entity['entity_name'])
+            
+            if all_entities:
+                try:
+                    entity_names_list = list(all_entities)
+                    embeddings = self.embedding_model.encode(entity_names_list)
+                    entity_embeddings_cache = dict(zip(entity_names_list, embeddings))
+                    print(f"✅ Pre-computed embeddings for {len(all_entities)} unique entities")
+                except Exception as e:
+                    print(f"⚠️ Failed to pre-compute embeddings: {e}")
+        
+        # Process each row in the original dataframe
+        for idx, row in df.iterrows():
+            query = row['Top queries']
+            cached_entities = query_entities_cache.get(query, [])
+            
+            for entity_info in cached_entities:
+                # Calculate query relevance efficiently using cached embeddings
+                query_relevance = 0.0
+                if self.embedding_model and entity_info['entity_name'] in entity_embeddings_cache:
+                    try:
+                        query_embedding = self.embedding_model.encode([query])
+                        entity_embedding = entity_embeddings_cache[entity_info['entity_name']].reshape(1, -1)
+                        query_relevance = cosine_similarity(query_embedding, entity_embedding)[0][0]
+                    except:
+                        pass
+                
+                entity_data.append({
+                    'Query': query,
+                    'Entity': entity_info['entity_name'],
+                    'Entity_Type': entity_info['entity_type'],
+                    'Entity_Salience': entity_info.get('salience', 0.0),
+                    'Entity_Mentions': entity_info.get('mentions', 1),
+                    'Query_Relevance': query_relevance,
+                    'Clicks': row['Clicks'],
+                    'Impressions': row['Impressions'],
+                    'CTR': row['CTR'],
+                    'Position': row['Position'],
+                    'Year': row['Year']
+                })
+        
+        print(f"✅ Entity extraction complete! Found {len(entity_data)} entity-query mappings from {total_unique} unique queries")
         return pd.DataFrame(entity_data)
     
     def _categorize_query_fallback(self, query):
@@ -323,6 +377,15 @@ def create_entity_performance_dashboard():
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
     
+    st.markdown("""
+    **Performance Optimizations:**
+    - ✅ Query deduplication (processes unique queries only once)
+    - ✅ Batch processing with larger batch sizes
+    - ✅ Pre-computed entity embeddings for faster similarity calculations  
+    - ✅ Smart caching to avoid reprocessing identical datasets
+    - ✅ Real-time progress tracking
+    """)
+    
     # Sidebar configuration
     st.sidebar.header("🔑 Configuration")
     
@@ -362,7 +425,10 @@ def create_entity_performance_dashboard():
     st.sidebar.subheader("⚙️ Analysis Settings")
     min_clicks = st.sidebar.slider("Minimum Clicks Filter", 0, 100, 10)
     min_impressions = st.sidebar.slider("Minimum Impressions Filter", 0, 1000, 50)
-    batch_size = st.sidebar.slider("NLP Batch Size", 10, 100, 50)
+    batch_size = st.sidebar.slider("NLP Batch Size", 100, 500, 200)
+    
+    # Add caching option
+    use_cache = st.sidebar.checkbox("Enable Caching", value=True, help="Cache results to speed up repeated analysis")
     
     if st.sidebar.button("🚀 Start Analysis", type="primary"):
         if not current_file or not previous_file:
@@ -397,13 +463,25 @@ def create_entity_performance_dashboard():
             
             combined_df = pd.concat([current_df, previous_df], ignore_index=True)
         
-        # Extract entities
-        with st.spinner("Extracting entities using Google Cloud NLP..."):
-            entity_df = analyzer.extract_entities_from_queries(combined_df, batch_size=batch_size)
-            
-            if entity_df.empty:
-                st.error("No entities were extracted. Please check your data and credentials.")
-                return
+        # Extract entities (with caching)
+        cache_key = f"{hash(str(combined_df['Top queries'].tolist()))}_batch{batch_size}"
+        
+        if use_cache and 'entity_cache' in st.session_state and cache_key in st.session_state.entity_cache:
+            st.info("📦 Using cached entity extraction results...")
+            entity_df = st.session_state.entity_cache[cache_key]
+        else:
+            with st.spinner("Extracting entities using Google Cloud NLP..."):
+                entity_df = analyzer.extract_entities_from_queries(combined_df, batch_size=batch_size)
+                
+                if entity_df.empty:
+                    st.error("No entities were extracted. Please check your data and credentials.")
+                    return
+                
+                # Cache results
+                if use_cache:
+                    if 'entity_cache' not in st.session_state:
+                        st.session_state.entity_cache = {}
+                    st.session_state.entity_cache[cache_key] = entity_df
         
         # Aggregate and calculate YOY changes
         with st.spinner("Calculating YOY performance changes..."):

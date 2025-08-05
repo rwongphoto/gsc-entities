@@ -494,7 +494,7 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
-    st.markdown("**🔄 Code Version: 3.0 - Fixed Entity Matching & YOY Calculations**")
+    st.markdown("**🔄 Code Version: 4.0 - Added Pivot Table Auto-Fix for Year Swapping**")
     
     st.markdown("""
     **Performance Optimizations:**
@@ -598,6 +598,11 @@ def create_entity_performance_dashboard():
             
             # Load data
             with st.spinner("Loading GSC data..."):
+                # DEBUG: Show which file is being assigned to which year
+                st.write("🔍 **File Upload Assignment Debug:**")
+                st.write(f"- File uploaded to 'Current Year' slot: {current_file.name if current_file else 'None'}")
+                st.write(f"- File uploaded to 'Previous Year' slot: {previous_file.name if previous_file else 'None'}")
+                
                 current_df = analyzer.load_gsc_data(current_file, "Current Year")
                 previous_df = analyzer.load_gsc_data(previous_file, "Previous Year")
                 

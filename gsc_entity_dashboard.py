@@ -358,6 +358,376 @@ class GSCEntityAnalyzer:
         # If there are still Entity-Year duplicates, resolve them by taking the one with higher clicks
         duplicates = agg_df.groupby(['Entity', 'Year']).size()
         if (duplicates > 1).any():
+            print(f"⚠️ Found {(duplicates > 1).sum()} entities with multiple types. Resolving by highest performance...")import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import streamlit as st
+from datetime import datetime
+import json
+import re
+from collections import defaultdict, Counter
+
+# Google Cloud NLP
+from google.cloud import language_v1
+from google.oauth2 import service_account
+
+# Sentence Transformers for similarity analysis
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+class GSCEntityAnalyzer:
+    def __init__(self, gcp_credentials_path=None, gcp_credentials_info=None):
+        """Initialize the GSC Entity Analyzer with Google Cloud NLP."""
+        self.gcp_credentials_path = gcp_credentials_path
+        self.gcp_credentials_info = gcp_credentials_info
+        self.nlp_client = None
+        
+        # Initialize Google Cloud NLP client
+        self._initialize_gcp_client()
+        
+        # Load embedding model for query similarity analysis
+        try:
+            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("✅ Embedding model loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Failed to load embedding model: {e}")
+            self.embedding_model = None
+    
+    def _initialize_gcp_client(self):
+        """Initialize Google Cloud Natural Language API client."""
+        try:
+            if self.gcp_credentials_info:
+                credentials = service_account.Credentials.from_service_account_info(self.gcp_credentials_info)
+                self.nlp_client = language_v1.LanguageServiceClient(credentials=credentials)
+                print("✅ Google Cloud NLP client initialized from credentials info")
+            elif self.gcp_credentials_path:
+                credentials = service_account.Credentials.from_service_account_file(self.gcp_credentials_path)
+                self.nlp_client = language_v1.LanguageServiceClient(credentials=credentials)
+                print("✅ Google Cloud NLP client initialized from file")
+            else:
+                # Try to use default credentials
+                self.nlp_client = language_v1.LanguageServiceClient()
+                print("✅ Google Cloud NLP client initialized with default credentials")
+        except Exception as e:
+            print(f"❌ Failed to initialize Google Cloud NLP client: {e}")
+            self.nlp_client = None
+    
+    def is_number_entity(self, entity_name):
+        """Check if an entity is primarily numeric and should be filtered out."""
+        if not entity_name:
+            return True
+
+        # Remove common separators and whitespace
+        cleaned = re.sub(r'[,\s\-\.]', '', entity_name)
+
+        # Check if it's purely numeric
+        if cleaned.isdigit():
+            return True
+
+        # Check if it's a percentage
+        if entity_name.strip().endswith('%') and re.sub(r'[%,\s\-\.]', '', entity_name).isdigit():
+            return True
+
+        # Check if it's a year (4 digits)
+        if re.match(r'^\d{4}$', cleaned):
+            return True
+
+        # Check if it's mostly numeric (>70% digits)
+        digit_count = sum(1 for char in entity_name if char.isdigit())
+        total_chars = len(re.sub(r'\s', '', entity_name))
+
+        if total_chars > 0 and (digit_count / total_chars) > 0.7:
+            return True
+
+        # Filter out very short numeric-heavy entities
+        if len(entity_name.strip()) <= 4 and any(char.isdigit() for char in entity_name):
+            return True
+
+        return False
+    
+    def extract_entities_with_google_nlp(self, text):
+        """Extract entities from text using Google Cloud Natural Language API."""
+        if not self.nlp_client or not text:
+            return {}
+
+        try:
+            # Handle text size limits (Google NLP API limit)
+            max_bytes = 800000  # Leave some buffer
+            text_bytes = text.encode('utf-8')
+            if len(text_bytes) > max_bytes:
+                text = text_bytes[:max_bytes].decode('utf-8', 'ignore')
+                print(f"⚠️ Text truncated to {len(text)} characters for API limits")
+
+            # Clean text for better NLP processing
+            text = re.sub(r'\|MINIBATCH_SEPARATOR\|', '. ', text)  # Replace mini-batch separators with periods
+            text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
+
+            document = language_v1.Document(content=text, type_=language_v1.Document.Type.PLAIN_TEXT)
+            response = self.nlp_client.analyze_entities(document=document, encoding_type=language_v1.EncodingType.UTF8)
+
+            entities_dict = {}
+            for entity in response.entities:
+                entity_name = entity.name.strip()
+
+                # Filter out number entities and very short entities
+                if self.is_number_entity(entity_name) or len(entity_name) < 2:
+                    continue
+
+                key = entity_name.lower()
+                if key not in entities_dict or entity.salience > entities_dict[key]['salience']:
+                    entities_dict[key] = {
+                        'name': entity_name,
+                        'type': language_v1.Entity.Type(entity.type_).name,
+                        'salience': entity.salience,
+                        'mentions': len(entity.mentions)
+                    }
+            return entities_dict
+
+        except Exception as e:
+            print(f"❌ Google Cloud NLP API Error: {e}")
+            return {}
+    
+    def load_gsc_data(self, file_path, year_label):
+        """Load and clean GSC data from CSV file."""
+        try:
+            df = pd.read_csv(file_path)
+            
+            # Clean and standardize column names
+            df.columns = df.columns.str.strip()
+            
+            # Convert CTR from percentage string to float
+            if 'CTR' in df.columns:
+                df['CTR'] = df['CTR'].str.replace('%', '').astype(float) / 100
+            
+            # Add year label for comparison
+            df['Year'] = year_label
+            
+            # Clean query strings
+            df['Top queries'] = df['Top queries'].str.lower().str.strip()
+            
+            # Debug: Show data summary
+            total_clicks = df['Clicks'].sum()
+            total_impressions = df['Impressions'].sum()
+            avg_position = df['Position'].mean()
+            
+            print(f"✅ Loaded {len(df)} queries for {year_label}")
+            print(f"   📊 Total clicks: {total_clicks:,}")
+            print(f"   👁️ Total impressions: {total_impressions:,}")
+            print(f"   📍 Average position: {avg_position:.2f}")
+            print(f"   📅 Date range indicators: {df['Top queries'].iloc[0]} ... {df['Top queries'].iloc[-1]}")
+            
+            return df
+            
+        except Exception as e:
+            print(f"❌ Error loading {file_path}: {e}")
+            return None
+    
+    def extract_entities_from_queries(self, df, batch_size=5):
+        """Extract entities from search queries using optimized mini-batch processing for accurate entity mapping."""
+        if not self.nlp_client:
+            print("❌ Google Cloud NLP client not available")
+            return pd.DataFrame()
+        
+        # Step 1: Get unique queries and prepare for mini-batch processing
+        unique_queries = df['Top queries'].unique()
+        total_unique = len(unique_queries)
+        total_queries = len(df)
+        
+        print(f"🔍 Processing {total_unique} unique queries from {total_queries} total queries...")
+        print(f"🎯 Using optimized mini-batch approach (batch size: {batch_size}) for accurate entity mapping...")
+        
+        # Step 2: Process in mini-batches for accurate entity-to-query mapping
+        query_entities_cache = {}
+        processed_count = 0
+        api_calls_made = 0
+        
+        # Create progress bar placeholder
+        progress_placeholder = st.empty()
+        
+        for i in range(0, total_unique, batch_size):
+            batch_queries = unique_queries[i:i+batch_size]
+            
+            # Create mini-batch text with clear separators
+            separator = " |MINIBATCH_SEPARATOR| "
+            batch_text = separator.join(batch_queries)
+            
+            # Extract entities from this mini-batch
+            batch_entities = self.extract_entities_with_google_nlp(batch_text)
+            api_calls_made += 1
+            
+            # Now do PRECISE mapping - only associate entities with queries where they actually appear
+            for query in batch_queries:
+                query_entities = []
+                query_lower = query.lower().strip()
+                
+                # For each entity found in the mini-batch, check if it PRECISELY belongs to this query
+                for entity_key, entity_info in batch_entities.items():
+                    entity_name = entity_info['name']
+                    entity_name_lower = entity_name.lower().strip()
+                    
+                    # STRICT MATCHING: Entity must be exactly in the query or a clear subset
+                    is_exact_match = False
+                    
+                    # Method 1: Exact entity name match
+                    if entity_name_lower == query_lower:
+                        is_exact_match = True
+                    
+                    # Method 2: Entity name is a meaningful substring of query (not just single words)
+                    elif len(entity_name_lower) > 3 and entity_name_lower in query_lower:
+                        # Additional check: make sure it's not just a coincidental substring
+                        # Entity should be word-bounded in the query
+                        import re
+                        pattern = r'\b' + re.escape(entity_name_lower) + r'\b'
+                        if re.search(pattern, query_lower):
+                            is_exact_match = True
+                    
+                    # Method 3: For multi-word entities, check if ALL words appear in query
+                    elif len(entity_name_lower.split()) > 1:
+                        entity_words = entity_name_lower.split()
+                        query_words = query_lower.split()
+                        if all(word in query_words for word in entity_words if len(word) > 2):
+                            is_exact_match = True
+                    
+                    # Method 4: For person names, be very strict
+                    elif entity_info['type'] == 'PERSON':
+                        # Person names should be exact matches or clear substrings
+                        if entity_name_lower in query_lower and len(entity_name_lower) > 4:
+                            is_exact_match = True
+                    
+                    if is_exact_match:
+                        query_entities.append({
+                            'entity_name': entity_info['name'],
+                            'entity_type': entity_info['type'],
+                            'salience': entity_info['salience'],
+                            'mentions': entity_info['mentions']
+                        })
+                
+                # Fallback: If no precise entities found, create a broad category
+                if not query_entities:
+                    query_entities = [self._categorize_query_fallback(query)]
+                
+                # Cache the results
+                query_entities_cache[query] = query_entities
+            
+            processed_count += len(batch_queries)
+            progress_percentage = (processed_count / total_unique) * 100
+            
+            # Update progress with API call info
+            progress_placeholder.progress(
+                processed_count / total_unique,
+                text=f"🎯 Processed {processed_count}/{total_unique} queries ({progress_percentage:.1f}%) | API calls: {api_calls_made}"
+            )
+        
+        progress_placeholder.empty()
+        
+        # Step 3: Build final dataset using precise entity mappings
+        print(f"🔄 Building precise entity-query mappings... (made {api_calls_made} API calls)")
+        entity_data = []
+        
+        # Pre-compute embeddings for unique entities if available
+        entity_embeddings_cache = {}
+        if self.embedding_model:
+            all_entities = set()
+            for entities_list in query_entities_cache.values():
+                for entity in entities_list:
+                    all_entities.add(entity['entity_name'])
+            
+            if all_entities:
+                try:
+                    entity_names_list = list(all_entities)
+                    embeddings = self.embedding_model.encode(entity_names_list)
+                    entity_embeddings_cache = dict(zip(entity_names_list, embeddings))
+                    print(f"✅ Pre-computed embeddings for {len(all_entities)} unique entities")
+                except Exception as e:
+                    print(f"⚠️ Failed to pre-compute embeddings: {e}")
+        
+        # Process each row in the original dataframe
+        precise_mappings = 0
+        fallback_mappings = 0
+        
+        for idx, row in df.iterrows():
+            query = row['Top queries']
+            cached_entities = query_entities_cache.get(query, [])
+            
+            for entity_info in cached_entities:
+                # Calculate query relevance efficiently using cached embeddings
+                query_relevance = 0.0
+                if self.embedding_model and entity_info['entity_name'] in entity_embeddings_cache:
+                    try:
+                        query_embedding = self.embedding_model.encode([query])
+                        entity_embedding = entity_embeddings_cache[entity_info['entity_name']].reshape(1, -1)
+                        query_relevance = cosine_similarity(query_embedding, entity_embedding)[0][0]
+                    except:
+                        pass
+                
+                entity_data.append({
+                    'Query': query,
+                    'Entity': entity_info['entity_name'],
+                    'Entity_Type': entity_info['entity_type'],
+                    'Entity_Salience': entity_info.get('salience', 0.0),
+                    'Entity_Mentions': entity_info.get('mentions', 1),
+                    'Query_Relevance': query_relevance,
+                    'Clicks': row['Clicks'],
+                    'Impressions': row['Impressions'],
+                    'CTR': row['CTR'],
+                    'Position': row['Position'],
+                    'Year': row['Year']
+                })
+                
+                # Track mapping quality
+                if entity_info.get('salience', 0) > 0.1:
+                    precise_mappings += 1
+                else:
+                    fallback_mappings += 1
+        
+        print(f"✅ Precise entity analysis complete!")
+        print(f"   📊 Made {api_calls_made} API calls (vs {total_unique} for individual processing)")
+        print(f"   🎯 Found {len(entity_data)} entity-query mappings from {total_unique} unique queries")
+        print(f"   ✅ Precise mappings: {precise_mappings}")
+        print(f"   📂 Fallback categorizations: {fallback_mappings}")
+        print(f"   🚀 Mapping accuracy: {(precise_mappings / (precise_mappings + fallback_mappings) * 100):.1f}%")
+        
+        return pd.DataFrame(entity_data)
+    
+    def _categorize_query_fallback(self, query):
+        """Fallback categorization when no entities are detected."""
+        query_lower = query.lower()
+        
+        # Photography-specific categorizations
+        if any(term in query_lower for term in ['photographer', 'photography', 'photo']):
+            return {'entity_name': 'Photography', 'entity_type': 'OTHER', 'salience': 0.3, 'mentions': 1}
+        elif any(term in query_lower for term in ['gallery', 'museum', 'exhibition']):
+            return {'entity_name': 'Art Gallery', 'entity_type': 'LOCATION', 'salience': 0.3, 'mentions': 1}
+        elif any(term in query_lower for term in ['nature', 'landscape', 'wildlife']):
+            return {'entity_name': 'Nature Photography', 'entity_type': 'OTHER', 'salience': 0.3, 'mentions': 1}
+        elif 'how' in query_lower or 'tutorial' in query_lower:
+            return {'entity_name': 'Tutorial Content', 'entity_type': 'OTHER', 'salience': 0.2, 'mentions': 1}
+        elif 'best' in query_lower or 'top' in query_lower:
+            return {'entity_name': 'Comparison Query', 'entity_type': 'OTHER', 'salience': 0.2, 'mentions': 1}
+        else:
+            return {'entity_name': 'General Photography', 'entity_type': 'OTHER', 'salience': 0.1, 'mentions': 1}
+    
+    def aggregate_entity_performance(self, entity_df):
+        """Aggregate performance metrics by entity and year."""
+        # First, handle potential duplicates by creating a unique entity identifier
+        entity_df['Entity_Unique'] = entity_df['Entity'] + '_' + entity_df['Entity_Type']
+        
+        # Aggregate by the unique entity identifier
+        agg_df = entity_df.groupby(['Entity_Unique', 'Entity', 'Entity_Type', 'Year']).agg({
+            'Clicks': 'sum',
+            'Impressions': 'sum',
+            'CTR': 'mean',
+            'Position': 'mean',
+            'Entity_Salience': 'mean',
+            'Query_Relevance': 'mean',
+            'Query': 'count'
+        }).rename(columns={'Query': 'Query_Count'}).reset_index()
+        
+        # If there are still Entity-Year duplicates, resolve them by taking the one with higher clicks
+        duplicates = agg_df.groupby(['Entity', 'Year']).size()
+        if (duplicates > 1).any():
             print(f"⚠️ Found {(duplicates > 1).sum()} entities with multiple types. Resolving by highest performance...")
             # Keep the version with highest clicks for each Entity-Year combination
             agg_df = agg_df.loc[agg_df.groupby(['Entity', 'Year'])['Clicks'].idxmax()].reset_index(drop=True)
@@ -416,6 +786,8 @@ class GSCEntityAnalyzer:
         print(f"📊 Comparing {previous_year} vs {current_year}")
         
         yoy_data = []
+        debug_entities = ['flower photographers', 'richard wong', 'ansel adams', 'galen rowell']  # Track these for debugging
+        
         for entity in pivot_data['Clicks'].index:
             # Get entity type (safely)
             entity_type_series = agg_df[agg_df['Entity'] == entity]['Entity_Type']
@@ -427,27 +799,36 @@ class GSCEntityAnalyzer:
                 current_val = pivot_data[metric].loc[entity, current_year]
                 previous_val = pivot_data[metric].loc[entity, previous_year]
                 
+                # Debug specific entities to verify calculations
+                if entity in debug_entities and metric == 'Clicks':
+                    print(f"\n🔍 DEBUG {entity.upper()}:")
+                    print(f"   Accessing pivot_data['{metric}'].loc['{entity}', '{current_year}'] = {current_val}")
+                    print(f"   Accessing pivot_data['{metric}'].loc['{entity}', '{previous_year}'] = {previous_val}")
+                
                 if metric == 'Position':
                     # For position, negative change means improvement (lower position number is better)
                     changes[f'{metric}_Change'] = previous_val - current_val
+                    if entity in debug_entities:
+                        print(f"   Position Change: {previous_val} - {current_val} = {changes[f'{metric}_Change']:.2f}")
                 else:
                     # For other metrics, calculate percentage change: (current - previous) / previous * 100
                     if previous_val > 0:
                         changes[f'{metric}_Change_%'] = ((current_val - previous_val) / previous_val) * 100
+                        if entity in debug_entities and metric == 'Clicks':
+                            print(f"   Clicks Change Calculation: ({current_val} - {previous_val}) / {previous_val} * 100 = {changes[f'{metric}_Change_%']:.2f}%")
                     elif current_val > 0:
                         # If previous was 0 but current has value, that's 100% growth
                         changes[f'{metric}_Change_%'] = 100.0
+                        if entity in debug_entities and metric == 'Clicks':
+                            print(f"   Clicks Change (from 0): 100.0%")
                     else:
                         # Both are 0
                         changes[f'{metric}_Change_%'] = 0.0
+                        if entity in debug_entities and metric == 'Clicks':
+                            print(f"   Clicks Change (both 0): 0.0%")
                 
                 changes[f'Current_{metric}'] = current_val
                 changes[f'Previous_{metric}'] = previous_val
-                
-                # Debug: Log the calculation for verification
-                if metric == 'Clicks' and entity in ['flower photographers', 'ansel adams', 'richard wong']:
-                    calc_result = changes[f'{metric}_Change_%']
-                    print(f"   📊 {entity} {metric}: {previous_val} → {current_val} = {calc_result:.1f}%")
             
             # Calculate combined performance score
             clicks_weight = 0.4
@@ -591,6 +972,21 @@ def create_entity_performance_dashboard():
                     st.error("Failed to load data files")
                     return
                 
+                # Debug: Show file content summary before filtering
+                st.info("📋 **File Content Summary (before filtering):**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Current Year File:**")
+                    st.write(f"- Rows: {len(current_df)}")
+                    st.write(f"- Total Clicks: {current_df['Clicks'].sum():,}")
+                    st.write(f"- Top query: '{current_df.loc[current_df['Clicks'].idxmax(), 'Top queries']}'")
+                
+                with col2:
+                    st.write("**Previous Year File:**") 
+                    st.write(f"- Rows: {len(previous_df)}")
+                    st.write(f"- Total Clicks: {previous_df['Clicks'].sum():,}")
+                    st.write(f"- Top query: '{previous_df.loc[previous_df['Clicks'].idxmax(), 'Top queries']}'")
+                
                 # Apply filters
                 current_df = current_df[
                     (current_df['Clicks'] >= min_clicks) & 
@@ -602,6 +998,22 @@ def create_entity_performance_dashboard():
                 ]
                 
                 combined_df = pd.concat([current_df, previous_df], ignore_index=True)
+                
+                # Debug: Show overlap analysis
+                current_queries = set(current_df['Top queries'])
+                previous_queries = set(previous_df['Top queries'])
+                overlap = current_queries & previous_queries
+                
+                st.info(f"📊 **Query Overlap Analysis:**")
+                st.write(f"- Current year unique queries: {len(current_queries)}")
+                st.write(f"- Previous year unique queries: {len(previous_queries)}")
+                st.write(f"- Overlapping queries: {len(overlap)} ({len(overlap)/max(len(current_queries), len(previous_queries))*100:.1f}%)")
+                
+                if len(overlap) < 10:
+                    st.warning("⚠️ Very low query overlap detected! This may indicate different time periods or data sources.")
+                    st.write("**Sample overlapping queries:**", list(overlap)[:5] if overlap else "None")
+                    st.write("**Current-only queries:**", list(current_queries - previous_queries)[:5])
+                    st.write("**Previous-only queries:**", list(previous_queries - current_queries)[:5])
             
             # Extract entities (with caching)
             cache_key = f"{hash(str(combined_df['Top queries'].tolist()))}_batch{batch_size}"

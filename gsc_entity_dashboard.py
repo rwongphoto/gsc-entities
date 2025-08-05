@@ -156,7 +156,14 @@ class GSCEntityAnalyzer:
             print(f"   📊 Total clicks: {total_clicks:,}")
             print(f"   👁️ Total impressions: {total_impressions:,}")
             print(f"   📍 Average position: {avg_position:.2f}")
-            print(f"   📅 Date range indicators: {df['Top queries'].iloc[0]} ... {df['Top queries'].iloc[-1]}")
+            
+            # DEBUG: Show Ansel Adams data in this file
+            ansel_queries = df[df['Top queries'].str.contains('ansel adams', na=False, case=False)]
+            if not ansel_queries.empty:
+                ansel_total_clicks = ansel_queries['Clicks'].sum()
+                print(f"   🎭 Ansel Adams in this file ({year_label}): {ansel_total_clicks} total clicks")
+                for _, row in ansel_queries.head(3).iterrows():
+                    print(f"      - '{row['Top queries']}': {row['Clicks']} clicks")
             
             return df
             
@@ -547,8 +554,8 @@ def create_entity_performance_dashboard():
     
     # Analysis parameters
     st.sidebar.subheader("⚙️ Analysis Settings")
-    min_clicks = st.sidebar.slider("Minimum Clicks Filter", 0, 100, 10)
-    min_impressions = st.sidebar.slider("Minimum Impressions Filter", 0, 1000, 50)
+    min_clicks = st.sidebar.slider("Minimum Clicks Filter", 0, 100, 1)
+    min_impressions = st.sidebar.slider("Minimum Impressions Filter", 0, 1000, 10)
     batch_size = st.sidebar.slider("Mini-Batch Size", 3, 10, 5, help="Number of queries per API call (smaller = more precise)")
     
     # Add caching option
@@ -679,6 +686,24 @@ def create_entity_performance_dashboard():
             st.session_state.analysis_complete = True
             
             st.success(f"✅ Analysis complete! Found {len(yoy_df)} entities across {len(entity_df)} query-entity mappings")
+        
+        # DEBUG: Check Ansel Adams in final YOY results
+        ansel_yoy = yoy_df[yoy_df['Entity'] == 'ansel adams']
+        if not ansel_yoy.empty:
+            row = ansel_yoy.iloc[0]
+            st.info("🔍 **DEBUG: Ansel Adams final YOY result:**")
+            st.write(f"- Previous_Clicks: {row['Previous_Clicks']}")
+            st.write(f"- Current_Clicks: {row['Current_Clicks']}")
+            st.write(f"- Clicks_Change_%: {row['Clicks_Change_%']:.1f}%")
+            
+            # Show what SHOULD be the result
+            st.write("**Expected (from file analysis):**")
+            st.write("- Previous_Clicks: 1 (from 2024 file)")
+            st.write("- Current_Clicks: 23 (from 2025 file)")
+            st.write("- Should be positive growth!")
+            
+            if row['Clicks_Change_%'] < 0:
+                st.error("❌ **NEGATIVE RESULT - YEARS ARE STILL SWAPPED!**")
     
     # Display Results (only if analysis is complete)
     if st.session_state.analysis_complete and st.session_state.yoy_df is not None:

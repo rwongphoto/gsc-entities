@@ -1056,7 +1056,8 @@ def create_entity_performance_dashboard():
                         'Previous_Clicks': 'Previous Year Clicks',
                         'Current_Clicks': 'Current Year Clicks',
                         'Clicks_Absolute_Change': 'Total Click Change'
-                    }
+                    },
+                    size_max=35
                 )
                 
                 # Add diagonal line for reference
@@ -1072,16 +1073,6 @@ def create_entity_performance_dashboard():
                     showarrow=False,
                     font=dict(color="gray", size=12),
                     bgcolor="rgba(255,255,255,0.8)"
-                )
-                
-                # Improve marker visibility
-                fig_scatter.update_traces(
-                    marker=dict(
-                        sizemin=8,
-                        sizemax=40,
-                        line=dict(width=2, color='white'),
-                        opacity=0.8
-                    )
                 )
                 
                 # Better layout

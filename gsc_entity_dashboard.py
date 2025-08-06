@@ -444,6 +444,15 @@ class GSCEntityAnalyzer:
                 changes[f'Current_{metric}'] = current_val  
                 changes[f'Previous_{metric}'] = previous_val
             
+            # Calculate CTR values from clicks and impressions
+            current_ctr = (changes['Current_Clicks'] / changes['Current_Impressions'] * 100) if changes['Current_Impressions'] > 0 else 0
+            previous_ctr = (changes['Previous_Clicks'] / changes['Previous_Impressions'] * 100) if changes['Previous_Impressions'] > 0 else 0
+            ctr_change = current_ctr - previous_ctr
+            
+            changes['Current_CTR'] = current_ctr
+            changes['Previous_CTR'] = previous_ctr
+            changes['CTR_Change_%'] = ((current_ctr - previous_ctr) / previous_ctr * 100) if previous_ctr > 0 else (100.0 if current_ctr > 0 else 0.0)
+            
             # Calculate combined performance score
             clicks_weight = 0.4
             impressions_weight = 0.3
@@ -491,17 +500,18 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
-    st.markdown("**🔄 Code Version: 11.1 - PERFORMANCE SCORE SORTING + TOTAL METRICS**")
+    st.markdown("**🔄 Code Version: 12.0 - TOTAL IMPACT FOCUS + ENHANCED DATA**")
     
     st.markdown("""
-    **🚀 LATEST IMPROVEMENTS:**
-    - ✅ **ENHANCED**: Metrics now show total numbers + percentage change for full context
-    - ✅ **REVERTED**: Top performers sorted by Performance Score (weighted combination of all metrics)
-    - ✅ **ENHANCED**: Declining entities sorted by lowest Performance Score  
-    - ✅ **NEW**: Winners vs Losers pie chart replaces confusing performance score distribution
-    - ✅ **NEW**: Current vs Previous scatter plot with trend line
-    - ✅ **NEW**: Entity type treemap showing volume and performance
-    - ✅ **NEW**: Horizontal bar chart for entity type performance comparison
+    **🚀 MAJOR IMPROVEMENTS:**
+    - ✅ **NEW**: Analysis Overview includes Overall CTR metric  
+    - ✅ **ENHANCED**: Tables now include Previous/Current Impressions & CTR columns
+    - ✅ **CHANGED**: Sorting by absolute click changes (total impact) instead of percentages
+    - ✅ **ENHANCED**: Visualizations focus on total changes with comprehensive hover data
+    - ✅ **IMPROVED**: Winners vs Losers shows total click gains/losses in labels
+    - ✅ **ENHANCED**: Scatter plot sized by current clicks, colored by absolute change
+    - ✅ **IMPROVED**: Treemap and bar charts show absolute changes with full context in tooltips
+    - ✅ **FOCUS**: All metrics prioritize business impact over percentage changes
     """)
 
     
@@ -708,7 +718,7 @@ def create_entity_performance_dashboard():
         
         # Key Metrics Overview
         st.subheader("📊 Analysis Overview")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
             total_entities = len(yoy_df)
@@ -740,6 +750,17 @@ def create_entity_performance_dashboard():
                 "Total Impressions", 
                 f"{total_current_impressions:,}",
                 delta=f"{impressions_delta:+,} ({total_impressions_change:+.1f}%)"
+            )
+        
+        with col5:
+            # Calculate weighted average CTR change
+            total_current_ctr = (total_current_clicks / total_current_impressions * 100) if total_current_impressions > 0 else 0
+            total_previous_ctr = (total_previous_clicks / total_previous_impressions * 100) if total_previous_impressions > 0 else 0
+            ctr_change = total_current_ctr - total_previous_ctr
+            st.metric(
+                "Overall CTR", 
+                f"{total_current_ctr:.2f}%",
+                delta=f"{ctr_change:+.2f}pp"
             )
         
         # Filters for results (these won't trigger rerun now)
@@ -780,21 +801,22 @@ def create_entity_performance_dashboard():
         # Top Performers Table
         st.subheader("🏆 Top Performing Entities YOY")
         if len(filtered_df) > 0:
-            # Sort by highest Performance Score (weighted combination of all metrics)
-            top_performers = filtered_df.nlargest(15, 'Performance_Score')[
-                ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Change_%', 'Impressions_Change_%', 
-                 'CTR_Change_%', 'Previous_Clicks', 'Current_Clicks']
+            # Calculate absolute click change for sorting by total impact
+            filtered_df['Clicks_Absolute_Change'] = filtered_df['Current_Clicks'] - filtered_df['Previous_Clicks']
+            
+            # Sort by highest absolute click increase (total impact)
+            top_performers = filtered_df.nlargest(15, 'Clicks_Absolute_Change')[
+                ['Entity', 'Entity_Type', 'Clicks_Absolute_Change', 'Previous_Clicks', 'Current_Clicks',
+                 'Previous_Impressions', 'Current_Impressions', 'Previous_CTR', 'Current_CTR', 'Clicks_Change_%']
             ].round(2)
             
             st.dataframe(
                 top_performers,
                 use_container_width=True,
                 column_config={
-                    "Performance_Score": st.column_config.ProgressColumn(
-                        "Performance Score",
-                        format="%.1f",
-                        min_value=-100,
-                        max_value=100,
+                    "Clicks_Absolute_Change": st.column_config.NumberColumn(
+                        "Total Click Gain",
+                        format="%d",
                     ),
                     "Clicks_Change_%": st.column_config.ProgressColumn(
                         "Clicks Change %",
@@ -802,17 +824,13 @@ def create_entity_performance_dashboard():
                         min_value=-100,
                         max_value=500,
                     ),
-                    "Impressions_Change_%": st.column_config.ProgressColumn(
-                        "Impressions Change %",
-                        format="%.1f%%", 
-                        min_value=-100,
-                        max_value=500,
+                    "Previous_CTR": st.column_config.NumberColumn(
+                        "Previous CTR",
+                        format="%.2f%%",
                     ),
-                    "CTR_Change_%": st.column_config.ProgressColumn(
-                        "CTR Change %",
-                        format="%.1f%%",
-                        min_value=-100,
-                        max_value=200,
+                    "Current_CTR": st.column_config.NumberColumn(
+                        "Current CTR", 
+                        format="%.2f%%",
                     ),
                 }
             )
@@ -822,23 +840,21 @@ def create_entity_performance_dashboard():
         # Declining Entities
         st.subheader("⚠️ Declining Entities - Optimization Opportunities")
         if len(filtered_df) > 0:
-            # Filter to only negative performers and sort by lowest Performance Score
-            declining_df = filtered_df[filtered_df['Performance_Score'] < 0]
+            # Filter to only declining entities and sort by most negative absolute change
+            declining_df = filtered_df[filtered_df['Clicks_Absolute_Change'] < 0]
             if len(declining_df) > 0:
-                declining = declining_df.nsmallest(15, 'Performance_Score')[
-                    ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Change_%', 'Impressions_Change_%', 
-                     'Previous_Clicks', 'Current_Clicks']
+                declining = declining_df.nsmallest(15, 'Clicks_Absolute_Change')[
+                    ['Entity', 'Entity_Type', 'Clicks_Absolute_Change', 'Previous_Clicks', 'Current_Clicks',
+                     'Previous_Impressions', 'Current_Impressions', 'Previous_CTR', 'Current_CTR', 'Clicks_Change_%']
                 ].round(2)
                 
                 st.dataframe(
                     declining, 
                     use_container_width=True,
                     column_config={
-                        "Performance_Score": st.column_config.ProgressColumn(
-                            "Performance Score",
-                            format="%.1f",
-                            min_value=-100,
-                            max_value=0,
+                        "Clicks_Absolute_Change": st.column_config.NumberColumn(
+                            "Total Click Loss",
+                            format="%d",
                         ),
                         "Clicks_Change_%": st.column_config.ProgressColumn(
                             "Clicks Change %",
@@ -846,11 +862,13 @@ def create_entity_performance_dashboard():
                             min_value=-100,
                             max_value=100,
                         ),
-                        "Impressions_Change_%": st.column_config.ProgressColumn(
-                            "Impressions Change %", 
-                            format="%.1f%%",
-                            min_value=-100,
-                            max_value=100,
+                        "Previous_CTR": st.column_config.NumberColumn(
+                            "Previous CTR",
+                            format="%.2f%%",
+                        ),
+                        "Current_CTR": st.column_config.NumberColumn(
+                            "Current CTR",
+                            format="%.2f%%",
                         ),
                     }
                 )
@@ -866,13 +884,21 @@ def create_entity_performance_dashboard():
             col1, col2 = st.columns(2)
             
             with col1:
-                # Winners vs Losers Analysis
-                winners_count = len(filtered_df[filtered_df['Clicks_Change_%'] > 0])
-                losers_count = len(filtered_df[filtered_df['Clicks_Change_%'] < 0])
-                stable_count = len(filtered_df[filtered_df['Clicks_Change_%'] == 0])
+                # Winners vs Losers Analysis based on absolute changes
+                winners_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] > 0])
+                losers_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] < 0])
+                stable_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] == 0])
+                
+                # Calculate total impacts
+                total_gains = filtered_df[filtered_df['Clicks_Absolute_Change'] > 0]['Clicks_Absolute_Change'].sum()
+                total_losses = abs(filtered_df[filtered_df['Clicks_Absolute_Change'] < 0]['Clicks_Absolute_Change'].sum())
                 
                 performance_summary = pd.DataFrame({
-                    'Performance': ['📈 Winners', '📉 Losers', '➡️ Stable'],
+                    'Performance': [
+                        f'📈 Winners (+{total_gains:,} clicks)', 
+                        f'📉 Losers (-{total_losses:,} clicks)', 
+                        '➡️ Stable'
+                    ],
                     'Count': [winners_count, losers_count, stable_count],
                     'Percentage': [
                         (winners_count / len(filtered_df)) * 100,
@@ -885,10 +911,10 @@ def create_entity_performance_dashboard():
                     performance_summary, 
                     values='Count', 
                     names='Performance',
-                    title="Entity Performance Distribution",
+                    title="Entity Performance Distribution<br><sub>Showing total click impact</sub>",
                     color_discrete_map={
-                        '📈 Winners': '#2E8B57',
-                        '📉 Losers': '#DC143C', 
+                        performance_summary.iloc[0]['Performance']: '#2E8B57',
+                        performance_summary.iloc[1]['Performance']: '#DC143C', 
                         '➡️ Stable': '#808080'
                     }
                 )
@@ -896,21 +922,33 @@ def create_entity_performance_dashboard():
                 st.plotly_chart(fig_summary, use_container_width=True)
             
             with col2:
-                # Current vs Previous Performance Scatter
+                # Current vs Previous Performance Scatter with absolute changes
+                # Add absolute change data for hover
+                scatter_data = filtered_df.head(50).copy()
+                scatter_data['Impressions_Absolute_Change'] = scatter_data['Current_Impressions'] - scatter_data['Previous_Impressions']
+                
                 fig_scatter = px.scatter(
-                    filtered_df.head(50),  # Limit to top 50 for readability
+                    scatter_data,
                     x='Previous_Clicks',
                     y='Current_Clicks',
                     size='Current_Clicks',
-                    color='Clicks_Change_%',
+                    color='Clicks_Absolute_Change',
                     hover_name='Entity',
-                    hover_data=['Entity_Type', 'Clicks_Change_%'],
-                    title="Current vs Previous Performance (Top 50)",
+                    hover_data={
+                        'Entity_Type': True,
+                        'Clicks_Absolute_Change': ':+,',
+                        'Impressions_Absolute_Change': ':+,',
+                        'Previous_Clicks': ':,',
+                        'Current_Clicks': ':,',
+                        'Previous_Impressions': ':,',
+                        'Current_Impressions': ':,'
+                    },
+                    title="Current vs Previous Performance (Top 50)<br><sub>Size = Current Clicks, Color = Total Change</sub>",
                     color_continuous_scale=['red', 'yellow', 'green'],
                     labels={
                         'Previous_Clicks': 'Previous Year Clicks',
                         'Current_Clicks': 'Current Year Clicks',
-                        'Clicks_Change_%': 'Change %'
+                        'Clicks_Absolute_Change': 'Total Click Change'
                     }
                 )
                 
@@ -933,53 +971,77 @@ def create_entity_performance_dashboard():
             # Enhanced Entity Type Performance with treemap
             if len(filtered_df['Entity_Type'].unique()) > 1:
                 entity_type_detailed = filtered_df.groupby('Entity_Type').agg({
-                    'Clicks_Change_%': 'mean',
-                    'Impressions_Change_%': 'mean',
                     'Current_Clicks': 'sum',
                     'Previous_Clicks': 'sum',
+                    'Current_Impressions': 'sum',
+                    'Previous_Impressions': 'sum',
+                    'Clicks_Absolute_Change': 'sum',
                     'Entity': 'count'
                 }).reset_index()
-                entity_type_detailed.columns = ['Entity_Type', 'Avg_Clicks_Change_%', 'Avg_Impressions_Change_%', 'Total_Current_Clicks', 'Total_Previous_Clicks', 'Entity_Count']
+                entity_type_detailed.columns = ['Entity_Type', 'Total_Current_Clicks', 'Total_Previous_Clicks', 'Total_Current_Impressions', 'Total_Previous_Impressions', 'Total_Click_Change', 'Entity_Count']
                 
-                # Calculate total change for each entity type
-                entity_type_detailed['Total_Change_%'] = (
-                    (entity_type_detailed['Total_Current_Clicks'] - entity_type_detailed['Total_Previous_Clicks']) / 
-                    entity_type_detailed['Total_Previous_Clicks'] * 100
-                ).fillna(0)
+                # Calculate impressions change
+                entity_type_detailed['Total_Impressions_Change'] = entity_type_detailed['Total_Current_Impressions'] - entity_type_detailed['Total_Previous_Impressions']
                 
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # Treemap showing entity types by volume and performance
+                    # Treemap showing entity types by current volume and colored by absolute change
                     fig_treemap = px.treemap(
                         entity_type_detailed,
                         path=['Entity_Type'],
                         values='Total_Current_Clicks',
-                        color='Total_Change_%',
-                        title="Entity Types by Current Traffic Volume & Performance",
+                        color='Total_Click_Change',
+                        title="Entity Types by Current Traffic Volume<br><sub>Size = Current Clicks, Color = Total Change</sub>",
                         color_continuous_scale=['red', 'yellow', 'green'],
-                        hover_data=['Entity_Count', 'Total_Change_%']
+                        hover_data={
+                            'Entity_Count': True,
+                            'Total_Click_Change': ':+,',
+                            'Total_Impressions_Change': ':+,',
+                            'Total_Current_Clicks': ':,',
+                            'Total_Previous_Clicks': ':,'
+                        }
                     )
                     fig_treemap.update_traces(
-                        textinfo="label+value+percent entry",
-                        textposition="middle center"
+                        textinfo="label+value",
+                        textposition="middle center",
+                        hovertemplate='<b>%{label}</b><br>' +
+                                    'Current Clicks: %{value:,}<br>' +
+                                    'Click Change: %{color:+,}<br>' +
+                                    'Entities: %{customdata[0]}<br>' +
+                                    'Impressions Change: %{customdata[1]:+,}<br>' +
+                                    '<extra></extra>'
                     )
                     st.plotly_chart(fig_treemap, use_container_width=True)
                 
                 with col2:
-                    # Bar chart showing performance by entity type
+                    # Bar chart showing absolute change by entity type
                     fig_bar = px.bar(
-                        entity_type_detailed.sort_values('Total_Change_%', ascending=True),
-                        x='Total_Change_%',
+                        entity_type_detailed.sort_values('Total_Click_Change', ascending=True),
+                        x='Total_Click_Change',
                         y='Entity_Type',
                         orientation='h',
-                        title="YOY Performance Change by Entity Type",
-                        color='Total_Change_%',
+                        title="Total Click Change by Entity Type<br><sub>Absolute numbers show real impact</sub>",
+                        color='Total_Click_Change',
                         color_continuous_scale=['red', 'yellow', 'green'],
-                        hover_data=['Entity_Count', 'Total_Current_Clicks']
+                        hover_data={
+                            'Entity_Count': True,
+                            'Total_Current_Clicks': ':,',
+                            'Total_Previous_Clicks': ':,',
+                            'Total_Impressions_Change': ':+,'
+                        }
                     )
                     fig_bar.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="Break-even")
                     fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+                    fig_bar.update_traces(
+                        hovertemplate='<b>%{y}</b><br>' +
+                                    'Click Change: %{x:+,}<br>' +
+                                    'Current Clicks: %{customdata[1]:,}<br>' +
+                                    'Previous Clicks: %{customdata[2]:,}<br>' +
+                                    'Entities: %{customdata[0]}<br>' +
+                                    'Impressions Change: %{customdata[3]:+,}<br>' +
+                                    '<extra></extra>'
+                    )
                     st.plotly_chart(fig_bar, use_container_width=True)
         
         # Detailed Entity Analysis

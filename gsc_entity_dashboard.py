@@ -918,7 +918,7 @@ def create_entity_performance_dashboard():
         
         if len(filtered_df) > 0:
             # Add toggle controls for visualizations
-            col_toggle1, col_toggle2 = st.columns(2)
+            col_toggle1, col_toggle2, col_toggle3 = st.columns(3)
             with col_toggle1:
                 pie_metric = st.selectbox(
                     "Entity Performance Distribution - Metric:",
@@ -932,6 +932,13 @@ def create_entity_performance_dashboard():
                     ["Clicks", "Impressions", "Performance Score"],
                     index=0,
                     key="bar_metric"
+                )
+            with col_toggle3:
+                treemap_metric = st.selectbox(
+                    "Entity Types Volume - Size By:",
+                    ["Current Clicks", "Current Impressions"],
+                    index=0,
+                    key="treemap_metric"
                 )
             
             col1, col2 = st.columns(2)
@@ -1102,30 +1109,43 @@ def create_entity_performance_dashboard():
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # Treemap (keep as clicks-focused)
+                    # Dynamic Treemap based on selected metric
+                    if treemap_metric == "Current Clicks":
+                        treemap_values = 'Total_Current_Clicks'
+                        treemap_title = "Entity Types by Current Traffic Volume<br><sub>Size = Current Clicks, Color = Total Click Change</sub>"
+                        treemap_hover_main = 'Current Clicks'
+                    else:  # Current Impressions
+                        treemap_values = 'Total_Current_Impressions'
+                        treemap_title = "Entity Types by Current Impression Volume<br><sub>Size = Current Impressions, Color = Total Click Change</sub>"
+                        treemap_hover_main = 'Current Impressions'
+                    
                     fig_treemap = px.treemap(
                         entity_type_detailed,
                         path=['Entity_Type'],
-                        values='Total_Current_Clicks',
+                        values=treemap_values,
                         color='Total_Click_Change',
-                        title="Entity Types by Current Traffic Volume<br><sub>Size = Current Clicks, Color = Total Click Change</sub>",
+                        title=treemap_title,
                         color_continuous_scale=['#DC143C', '#FFA500', '#FFD700', '#ADFF2F', '#2E8B57'],
                         hover_data={
                             'Entity_Count': True,
                             'Total_Click_Change': ':+,',
                             'Total_Impressions_Change': ':+,',
                             'Total_Current_Clicks': ':,',
-                            'Total_Previous_Clicks': ':,'
+                            'Total_Previous_Clicks': ':,',
+                            'Total_Current_Impressions': ':,',
+                            'Total_Previous_Impressions': ':,'
                         }
                     )
                     fig_treemap.update_traces(
                         textinfo="label+value",
                         textposition="middle center",
                         hovertemplate='<b>%{label}</b><br>' +
-                                    'Current Clicks: %{value:,}<br>' +
+                                    f'{treemap_hover_main}: %{{value:,}}<br>' +
                                     'Click Change: %{color:+,}<br>' +
                                     'Entities: %{customdata[0]}<br>' +
                                     'Impressions Change: %{customdata[1]:+,}<br>' +
+                                    'Current Clicks: %{customdata[2]:,}<br>' +
+                                    'Current Impressions: %{customdata[4]:,}<br>' +
                                     '<extra></extra>'
                     )
                     st.plotly_chart(fig_treemap, use_container_width=True)

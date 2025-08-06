@@ -327,7 +327,275 @@ class GSCEntityAnalyzer:
         
         return pd.DataFrame(entity_data)
     
+    def create_entity_analysis_image(self, entity_name, entity_details, entity_queries, yoy_df):
+        """Create a downloadable image summary of entity analysis."""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+            from io import BytesIO
+        except ImportError:
+            print("Matplotlib not available for image generation")
+            return None
+            
+        try:
+            # Create figure with subplots
+            fig = plt.figure(figsize=(16, 12))
+            fig.suptitle(f'Entity Analysis Report: {entity_name}', fontsize=20, fontweight='bold', y=0.95)
+            
+            # Define colors
+            positive_color = '#2E8B57'
+            negative_color = '#DC143C'
+            neutral_color = '#4682B4'
+            
+            # Entity Overview (Top Left)
+            ax1 = plt.subplot(2, 2, 1)
+            ax1.axis('off')
+            ax1.text(0.5, 0.9, 'Entity Overview', fontsize=16, fontweight='bold', ha='center', transform=ax1.transAxes)
+            
+            overview_text = f"""
+Entity: {entity_name}
+Type: {entity_details['Entity_Type']}
+Performance Score: {entity_details['Performance_Score']:.1f}
+
+Previous Year Metrics:
+• Clicks: {int(entity_details['Previous_Clicks']):,}
+• Impressions: {int(entity_details['Previous_Impressions']):,}  
+• CTR: {entity_details.get('Previous_CTR', 0):.2f}%
+
+Current Year Metrics:
+• Clicks: {int(entity_details['Current_Clicks']):,}
+• Impressions: {int(entity_details['Current_Impressions']):,}
+• CTR: {entity_details.get('Current_CTR', 0):.2f}%
+            """
+            
+            ax1.text(0.05, 0.75, overview_text, fontsize=11, ha='left', va='top', transform=ax1.transAxes, 
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor='lightgray', alpha=0.3))
+            
+            # YOY Changes Chart (Top Right)
+            ax2 = plt.subplot(2, 2, 2)
+            
+            metrics = ['Clicks', 'Impressions', 'CTR']
+            changes = [
+                entity_details['Clicks_Change_%'],
+                entity_details['Impressions_Change_%'], 
+                entity_details.get('CTR_Change_%', 0)
+            ]
+            
+            colors = [positive_color if x > 0 else negative_color if x < 0 else neutral_color for x in changes]
+            
+            bars = ax2.barh(metrics, changes, color=colors, alpha=0.7)
+            ax2.set_xlabel('Percentage Change (%)')
+            ax2.set_title('Year-over-Year Changes', fontweight='bold', pad=20)
+            ax2.axvline(x=0, color='black', linestyle='-', alpha=0.3)
+            ax2.grid(axis='x', alpha=0.3)
+            
+            # Add value labels on bars
+            for bar, change in zip(bars, changes):
+                width = bar.get_width()
+                ax2.text(width + (5 if width >= 0 else -5), bar.get_y() + bar.get_height()/2, 
+                        f'{change:+.1f}%', ha='left' if width >= 0 else 'right', va='center', fontweight='bold')
+            
+            # Related Queries (Bottom Left)
+            ax3 = plt.subplot(2, 2, 3)
+            ax3.axis('off')
+            ax3.text(0.5, 0.95, 'Top Related Queries', fontsize=16, fontweight='bold', ha='center', transform=ax3.transAxes)
+            
+            # Get top queries by total clicks
+            queries_summary = entity_queries.groupby(['Query', 'Year']).agg({
+                'Clicks': 'sum',
+                'Impressions': 'sum'
+            }).reset_index()
+            
+            top_queries = queries_summary.nlargest(8, 'Clicks')
+            
+            query_text = ""
+            for i, (_, row) in enumerate(top_queries.iterrows()):
+                year_icon = "📅" if row['Year'] == "Current Year" else "📆" 
+                query_text += f"{year_icon} {row['Query'][:50]}{'...' if len(row['Query']) > 50 else ''}\n"
+                query_text += f"   {int(row['Clicks']):,} clicks, {int(row['Impressions']):,} impressions\n\n"
+            
+            ax3.text(0.05, 0.85, query_text, fontsize=10, ha='left', va='top', transform=ax3.transAxes,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor='lightblue', alpha=0.3))
+            
+            # Performance Trend Visualization (Bottom Right)
+            ax4 = plt.subplot(2, 2, 4)
+            
+            years = ['Previous Year', 'Current Year']
+            clicks_values = [entity_details['Previous_Clicks'], entity_details['Current_Clicks']]
+            impressions_values = [entity_details['Previous_Impressions'], entity_details['Current_Impressions']]
+            
+            ax4_twin = ax4.twinx()
+            
+            line1 = ax4.plot(years, clicks_values, 'o-', color=positive_color, linewidth=3, markersize=8, label='Clicks')
+            line2 = ax4_twin.plot(years, impressions_values, 's--', color=neutral_color, linewidth=3, markersize=8, label='Impressions')
+            
+            ax4.set_ylabel('Clicks', color=positive_color, fontweight='bold')
+            ax4_twin.set_ylabel('Impressions', color=neutral_color, fontweight='bold')
+            ax4.set_title('Performance Trend', fontweight='bold', pad=20)
+            ax4.grid(True, alpha=0.3)
+            
+            # Add value labels
+            for i, (clicks, impressions) in enumerate(zip(clicks_values, impressions_values)):
+                ax4.text(i, clicks, f'{int(clicks):,}', ha='center', va='bottom', fontweight='bold', color=positive_color)
+                ax4_twin.text(i, impressions, f'{int(impressions):,}', ha='center', va='top', fontweight='bold', color=neutral_color)
+            
+            # Combine legends
+            lines1, labels1 = ax4.get_legend_handles_labels()
+            lines2, labels2 = ax4_twin.get_legend_handles_labels()
+            ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper center', bbox_to_anchor=(0.5, -0.05), ncol=2)
+            
+            # Add footer
+            fig.text(0.5, 0.02, f'Generated by GSC Entity Dashboard - {entity_details["Entity_Type"]} Entity Analysis', 
+                    ha='center', fontsize=10, style='italic', alpha=0.7)
+            
+            plt.tight_layout()
+            plt.subplots_adjust(top=0.92, bottom=0.08)
+            
+            # Save to BytesIO
+            img_buffer = BytesIO()
+            plt.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+            img_buffer.seek(0)
+            plt.close()
+            
+            return img_buffer.getvalue()
+            
+        except Exception as e:
+            print(f"Error creating entity analysis image: {e}")
+            return None
+
     def _categorize_query_fallback(self, query):
+        """Create a downloadable image summary of entity analysis."""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+            from io import BytesIO
+            
+            # Create figure with subplots
+            fig = plt.figure(figsize=(16, 12))
+            fig.suptitle(f'Entity Analysis Report: {entity_name}', fontsize=20, fontweight='bold', y=0.95)
+            
+            # Define colors
+            positive_color = '#2E8B57'
+            negative_color = '#DC143C'
+            neutral_color = '#4682B4'
+            
+            # Entity Overview (Top Left)
+            ax1 = plt.subplot(2, 2, 1)
+            ax1.axis('off')
+            ax1.text(0.5, 0.9, 'Entity Overview', fontsize=16, fontweight='bold', ha='center', transform=ax1.transAxes)
+            
+            overview_text = f"""
+Entity: {entity_name}
+Type: {entity_details['Entity_Type']}
+Performance Score: {entity_details['Performance_Score']:.1f}
+
+Previous Year Metrics:
+• Clicks: {int(entity_details['Previous_Clicks']):,}
+• Impressions: {int(entity_details['Previous_Impressions']):,}  
+• CTR: {entity_details['Previous_CTR']:.2f}%
+• Position: {entity_details['Previous_Position']:.1f}
+
+Current Year Metrics:
+• Clicks: {int(entity_details['Current_Clicks']):,}
+• Impressions: {int(entity_details['Current_Impressions']):,}
+• CTR: {entity_details['Current_CTR']:.2f}%
+• Position: {entity_details['Current_Position']:.1f}
+            """
+            
+            ax1.text(0.05, 0.75, overview_text, fontsize=11, ha='left', va='top', transform=ax1.transAxes, 
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor='lightgray', alpha=0.3))
+            
+            # YOY Changes Chart (Top Right)
+            ax2 = plt.subplot(2, 2, 2)
+            
+            metrics = ['Clicks', 'Impressions', 'CTR']
+            changes = [
+                entity_details['Clicks_Change_%'],
+                entity_details['Impressions_Change_%'], 
+                entity_details['CTR_Change_%']
+            ]
+            
+            colors = [positive_color if x > 0 else negative_color if x < 0 else neutral_color for x in changes]
+            
+            bars = ax2.barh(metrics, changes, color=colors, alpha=0.7)
+            ax2.set_xlabel('Percentage Change (%)')
+            ax2.set_title('Year-over-Year Changes', fontweight='bold', pad=20)
+            ax2.axvline(x=0, color='black', linestyle='-', alpha=0.3)
+            ax2.grid(axis='x', alpha=0.3)
+            
+            # Add value labels on bars
+            for bar, change in zip(bars, changes):
+                width = bar.get_width()
+                ax2.text(width + (5 if width >= 0 else -5), bar.get_y() + bar.get_height()/2, 
+                        f'{change:+.1f}%', ha='left' if width >= 0 else 'right', va='center', fontweight='bold')
+            
+            # Related Queries (Bottom Left)
+            ax3 = plt.subplot(2, 2, 3)
+            ax3.axis('off')
+            ax3.text(0.5, 0.95, 'Top Related Queries', fontsize=16, fontweight='bold', ha='center', transform=ax3.transAxes)
+            
+            # Get top queries by total clicks
+            queries_summary = entity_queries.groupby(['Query', 'Year']).agg({
+                'Clicks': 'sum',
+                'Impressions': 'sum'
+            }).reset_index()
+            
+            top_queries = queries_summary.nlargest(8, 'Clicks')
+            
+            query_text = ""
+            for i, (_, row) in enumerate(top_queries.iterrows()):
+                year_icon = "📅" if row['Year'] == "Current Year" else "📆" 
+                query_text += f"{year_icon} {row['Query'][:50]}{'...' if len(row['Query']) > 50 else ''}\n"
+                query_text += f"   {int(row['Clicks']):,} clicks, {int(row['Impressions']):,} impressions\n\n"
+            
+            ax3.text(0.05, 0.85, query_text, fontsize=10, ha='left', va='top', transform=ax3.transAxes,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor='lightblue', alpha=0.3))
+            
+            # Performance Trend Visualization (Bottom Right)
+            ax4 = plt.subplot(2, 2, 4)
+            
+            years = ['Previous Year', 'Current Year']
+            clicks_values = [entity_details['Previous_Clicks'], entity_details['Current_Clicks']]
+            impressions_values = [entity_details['Previous_Impressions'], entity_details['Current_Impressions']]
+            
+            ax4_twin = ax4.twinx()
+            
+            line1 = ax4.plot(years, clicks_values, 'o-', color=positive_color, linewidth=3, markersize=8, label='Clicks')
+            line2 = ax4_twin.plot(years, impressions_values, 's--', color=neutral_color, linewidth=3, markersize=8, label='Impressions')
+            
+            ax4.set_ylabel('Clicks', color=positive_color, fontweight='bold')
+            ax4_twin.set_ylabel('Impressions', color=neutral_color, fontweight='bold')
+            ax4.set_title('Performance Trend', fontweight='bold', pad=20)
+            ax4.grid(True, alpha=0.3)
+            
+            # Add value labels
+            for i, (clicks, impressions) in enumerate(zip(clicks_values, impressions_values)):
+                ax4.text(i, clicks, f'{int(clicks):,}', ha='center', va='bottom', fontweight='bold', color=positive_color)
+                ax4_twin.text(i, impressions, f'{int(impressions):,}', ha='center', va='top', fontweight='bold', color=neutral_color)
+            
+            # Combine legends
+            lines1, labels1 = ax4.get_legend_handles_labels()
+            lines2, labels2 = ax4_twin.get_legend_handles_labels()
+            ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper center', bbox_to_anchor=(0.5, -0.05), ncol=2)
+            
+            # Add footer
+            fig.text(0.5, 0.02, f'Generated by GSC Entity Dashboard - {entity_details["Entity_Type"]} Analysis', 
+                    ha='center', fontsize=10, style='italic', alpha=0.7)
+            
+            plt.tight_layout()
+            plt.subplots_adjust(top=0.92, bottom=0.08)
+            
+            # Save to BytesIO
+            img_buffer = BytesIO()
+            plt.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+            img_buffer.seek(0)
+            plt.close()
+            
+            return img_buffer.getvalue()
+            
+        except Exception as e:
+            print(f"Error creating entity analysis image: {e}")
+            return None
         """Fallback categorization when no entities are detected."""
         query_lower = query.lower()
         
@@ -1199,15 +1467,39 @@ def create_entity_performance_dashboard():
         st.subheader("🔍 Detailed Entity Analysis")
         
         if len(filtered_df) > 0:
-            selected_entity = st.selectbox(
-                "Select an entity for detailed analysis:",
-                options=filtered_df['Entity'].tolist(),
-                key="entity_detail_selector"
-            )
+            col_select, col_download = st.columns([3, 1])
+            
+            with col_select:
+                selected_entity = st.selectbox(
+                    "Select an entity for detailed analysis:",
+                    options=filtered_df['Entity'].tolist(),
+                    key="entity_detail_selector"
+                )
             
             if selected_entity:
                 entity_details = yoy_df[yoy_df['Entity'] == selected_entity].iloc[0]
                 entity_queries = entity_df[entity_df['Entity'] == selected_entity]
+                
+                # Generate downloadable image
+                with col_download:
+                    if st.session_state.analyzer:
+                        try:
+                            image_data = st.session_state.analyzer.create_entity_analysis_image(
+                                selected_entity, entity_details, entity_queries, yoy_df
+                            )
+                            
+                            if image_data:
+                                st.download_button(
+                                    label="📸 Download Analysis",
+                                    data=image_data,
+                                    file_name=f"entity_analysis_{selected_entity.replace(' ', '_')}.png",
+                                    mime="image/png",
+                                    key="download_entity_analysis"
+                                )
+                            else:
+                                st.info("📸 Install matplotlib for image downloads")
+                        except Exception as e:
+                            st.info("📸 Image generation unavailable")
                 
                 col1, col2 = st.columns(2)
                 

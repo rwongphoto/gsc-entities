@@ -475,7 +475,7 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
-    st.markdown("**🔄 Code Version: 8.0 - FINAL FIX: Explicit Column Access**")
+    st.markdown("**🔄 Code Version: 9.0 - COMPLETE REWRITE: No Pivot Tables, Direct Data Access**")
     
     st.markdown("""
     **Performance Optimizations:**

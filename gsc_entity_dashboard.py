@@ -411,24 +411,10 @@ class GSCEntityAnalyzer:
             
             # Calculate changes for each metric
             changes = {}
-            
-            # FIRST: Detect if years are swapped by checking clicks (most reliable indicator)
-            current_clicks = pivot_data['Clicks'].loc[entity, current_year]
-            previous_clicks = pivot_data['Clicks'].loc[entity, previous_year]
-            years_are_swapped = current_clicks < previous_clicks
-            
             for metric in metrics:
-                # Get the values from pivot table
-                raw_current_val = pivot_data[metric].loc[entity, current_year]
-                raw_previous_val = pivot_data[metric].loc[entity, previous_year]
-                
-                # Apply the same swap logic to ALL metrics if years are detected as swapped
-                if years_are_swapped:
-                    current_val = raw_previous_val  # Use the "previous" column as current
-                    previous_val = raw_current_val  # Use the "current" column as previous
-                else:
-                    current_val = raw_current_val
-                    previous_val = raw_previous_val
+                # Get the values from pivot table (NO AUTO-SWAPPING)
+                current_val = pivot_data[metric].loc[entity, current_year]
+                previous_val = pivot_data[metric].loc[entity, previous_year]
                 
                 if metric == 'Position':
                     # For position, negative change means improvement (lower position number is better)
@@ -444,7 +430,7 @@ class GSCEntityAnalyzer:
                         # Both are 0
                         changes[f'{metric}_Change_%'] = 0.0
                 
-                # Store the corrected values
+                # Store the values as they are
                 changes[f'Current_{metric}'] = current_val  
                 changes[f'Previous_{metric}'] = previous_val
             
@@ -489,7 +475,7 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
-    st.markdown("**🔄 Code Version: 6.0 - Fixed ALL Metrics (Clicks, Impressions, CTR, Position)**")
+    st.markdown("**🔄 Code Version: 7.0 - Removed Flawed Auto-Fix Logic (Negative Growth is Valid)**")
     
     st.markdown("""
     **Performance Optimizations:**

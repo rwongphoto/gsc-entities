@@ -736,8 +736,8 @@ def create_entity_performance_dashboard():
             clicks_delta = total_current_clicks - total_previous_clicks
             st.metric(
                 "Total Clicks", 
-                f"{total_current_clicks:,}",
-                delta=f"{clicks_delta:+,} ({total_clicks_change:+.1f}%)"
+                f"{int(total_current_clicks):,}",
+                delta=f"{int(clicks_delta):+,} ({total_clicks_change:+.1f}%)"
             )
         
         with col4:
@@ -748,8 +748,8 @@ def create_entity_performance_dashboard():
             impressions_delta = total_current_impressions - total_previous_impressions
             st.metric(
                 "Total Impressions", 
-                f"{total_current_impressions:,}",
-                delta=f"{impressions_delta:+,} ({total_impressions_change:+.1f}%)"
+                f"{int(total_current_impressions):,}",
+                delta=f"{int(impressions_delta):+,} ({total_impressions_change:+.1f}%)"
             )
         
         with col5:

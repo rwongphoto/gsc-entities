@@ -917,51 +917,123 @@ def create_entity_performance_dashboard():
         st.subheader("📊 Entity Performance Visualizations")
         
         if len(filtered_df) > 0:
+            # Add toggle controls for visualizations
+            col_toggle1, col_toggle2 = st.columns(2)
+            with col_toggle1:
+                pie_metric = st.selectbox(
+                    "Entity Performance Distribution - Metric:",
+                    ["Clicks", "Impressions", "Performance Score", "Total Entities"],
+                    index=0,
+                    key="pie_metric"
+                )
+            with col_toggle2:
+                bar_metric = st.selectbox(
+                    "Entity Type Performance - Metric:",
+                    ["Clicks", "Impressions", "Performance Score"],
+                    index=0,
+                    key="bar_metric"
+                )
+            
             col1, col2 = st.columns(2)
             
             with col1:
-                # Winners vs Losers Analysis based on absolute changes
-                winners_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] > 0])
-                losers_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] < 0])
-                stable_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] == 0])
+                # Dynamic Winners vs Losers Analysis
+                if pie_metric == "Total Entities":
+                    # Simple count-based pie chart
+                    winners_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] > 0])
+                    losers_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] < 0])
+                    stable_count = len(filtered_df[filtered_df['Clicks_Absolute_Change'] == 0])
+                    
+                    performance_summary = pd.DataFrame({
+                        'Performance': ['📈 Winners', '📉 Losers', '➡️ Stable'],
+                        'Count': [winners_count, losers_count, stable_count],
+                    })
+                    
+                    fig_summary = px.pie(
+                        performance_summary, 
+                        values='Count', 
+                        names='Performance',
+                        title="Entity Performance Distribution<br><sub>By entity count</sub>",
+                        color_discrete_map={
+                            '📈 Winners': '#2E8B57',
+                            '📉 Losers': '#DC143C', 
+                            '➡️ Stable': '#808080'
+                        }
+                    )
+                    
+                elif pie_metric == "Performance Score":
+                    # Performance Score based analysis
+                    winners_count = len(filtered_df[filtered_df['Performance_Score'] > 0])
+                    losers_count = len(filtered_df[filtered_df['Performance_Score'] < 0])
+                    stable_count = len(filtered_df[filtered_df['Performance_Score'] == 0])
+                    
+                    avg_winner_score = filtered_df[filtered_df['Performance_Score'] > 0]['Performance_Score'].mean() if winners_count > 0 else 0
+                    avg_loser_score = filtered_df[filtered_df['Performance_Score'] < 0]['Performance_Score'].mean() if losers_count > 0 else 0
+                    
+                    performance_summary = pd.DataFrame({
+                        'Performance': [
+                            f'📈 Winners (Avg: {avg_winner_score:.1f})',
+                            f'📉 Losers (Avg: {avg_loser_score:.1f})',
+                            '➡️ Stable'
+                        ],
+                        'Count': [winners_count, losers_count, stable_count],
+                    })
+                    
+                    fig_summary = px.pie(
+                        performance_summary, 
+                        values='Count', 
+                        names='Performance',
+                        title="Entity Performance Distribution<br><sub>By Performance Score</sub>",
+                        color_discrete_map={
+                            performance_summary.iloc[0]['Performance']: '#2E8B57',
+                            performance_summary.iloc[1]['Performance']: '#DC143C', 
+                            '➡️ Stable': '#808080'
+                        }
+                    )
+                    
+                else:
+                    # Clicks or Impressions based analysis
+                    metric_col = f'{pie_metric}_Absolute_Change'
+                    if pie_metric == "Impressions":
+                        filtered_df['Impressions_Absolute_Change'] = filtered_df['Current_Impressions'] - filtered_df['Previous_Impressions']
+                    
+                    winners_count = len(filtered_df[filtered_df[metric_col] > 0])
+                    losers_count = len(filtered_df[filtered_df[metric_col] < 0])
+                    stable_count = len(filtered_df[filtered_df[metric_col] == 0])
+                    
+                    total_gains = filtered_df[filtered_df[metric_col] > 0][metric_col].sum()
+                    total_losses = abs(filtered_df[filtered_df[metric_col] < 0][metric_col].sum())
+                    
+                    performance_summary = pd.DataFrame({
+                        'Performance': [
+                            f'📈 Winners (+{total_gains:,.0f} {pie_metric.lower()})', 
+                            f'📉 Losers (-{total_losses:,.0f} {pie_metric.lower()})', 
+                            '➡️ Stable'
+                        ],
+                        'Count': [winners_count, losers_count, stable_count],
+                    })
+                    
+                    fig_summary = px.pie(
+                        performance_summary, 
+                        values='Count', 
+                        names='Performance',
+                        title=f"Entity Performance Distribution<br><sub>Showing total {pie_metric.lower()} impact</sub>",
+                        color_discrete_map={
+                            performance_summary.iloc[0]['Performance']: '#2E8B57',
+                            performance_summary.iloc[1]['Performance']: '#DC143C', 
+                            '➡️ Stable': '#808080'
+                        }
+                    )
                 
-                # Calculate total impacts
-                total_gains = filtered_df[filtered_df['Clicks_Absolute_Change'] > 0]['Clicks_Absolute_Change'].sum()
-                total_losses = abs(filtered_df[filtered_df['Clicks_Absolute_Change'] < 0]['Clicks_Absolute_Change'].sum())
-                
-                performance_summary = pd.DataFrame({
-                    'Performance': [
-                        f'📈 Winners (+{total_gains:,} clicks)', 
-                        f'📉 Losers (-{total_losses:,} clicks)', 
-                        '➡️ Stable'
-                    ],
-                    'Count': [winners_count, losers_count, stable_count],
-                    'Percentage': [
-                        (winners_count / len(filtered_df)) * 100,
-                        (losers_count / len(filtered_df)) * 100, 
-                        (stable_count / len(filtered_df)) * 100
-                    ]
-                })
-                
-                fig_summary = px.pie(
-                    performance_summary, 
-                    values='Count', 
-                    names='Performance',
-                    title="Entity Performance Distribution<br><sub>Showing total click impact</sub>",
-                    color_discrete_map={
-                        performance_summary.iloc[0]['Performance']: '#2E8B57',
-                        performance_summary.iloc[1]['Performance']: '#DC143C', 
-                        '➡️ Stable': '#808080'
-                    }
-                )
                 fig_summary.update_traces(textposition='inside', textinfo='percent+label')
                 st.plotly_chart(fig_summary, use_container_width=True)
             
             with col2:
-                # Current vs Previous Performance Scatter with absolute changes
-                # Add absolute change data for hover
-                scatter_data = filtered_df.head(50).copy()
-                scatter_data['Impressions_Absolute_Change'] = scatter_data['Current_Impressions'] - scatter_data['Previous_Impressions']
+                # Improved Current vs Previous Performance Scatter with better visibility
+                scatter_data = filtered_df.head(30).copy()  # Reduced to 30 for better visibility
+                
+                if pie_metric == "Impressions":
+                    scatter_data['Impressions_Absolute_Change'] = scatter_data['Current_Impressions'] - scatter_data['Previous_Impressions']
                 
                 fig_scatter = px.scatter(
                     scatter_data,
@@ -973,14 +1045,13 @@ def create_entity_performance_dashboard():
                     hover_data={
                         'Entity_Type': True,
                         'Clicks_Absolute_Change': ':+,',
-                        'Impressions_Absolute_Change': ':+,',
                         'Previous_Clicks': ':,',
                         'Current_Clicks': ':,',
                         'Previous_Impressions': ':,',
                         'Current_Impressions': ':,'
                     },
-                    title="Current vs Previous Performance (Top 50)<br><sub>Size = Current Clicks, Color = Total Change</sub>",
-                    color_continuous_scale=['red', 'yellow', 'green'],
+                    title="Current vs Previous Performance (Top 30)<br><sub>Larger bubbles = more current clicks</sub>",
+                    color_continuous_scale=['#DC143C', '#FFA500', '#FFD700', '#ADFF2F', '#2E8B57'],
                     labels={
                         'Previous_Clicks': 'Previous Year Clicks',
                         'Current_Clicks': 'Current Year Clicks',
@@ -988,48 +1059,66 @@ def create_entity_performance_dashboard():
                     }
                 )
                 
-                # Add diagonal line for reference (y = x means no change)
-                max_val = max(filtered_df['Current_Clicks'].max(), filtered_df['Previous_Clicks'].max())
+                # Add diagonal line for reference
+                max_val = max(scatter_data['Current_Clicks'].max(), scatter_data['Previous_Clicks'].max())
                 fig_scatter.add_shape(
                     type="line",
                     x0=0, y0=0, x1=max_val, y1=max_val,
-                    line=dict(color="gray", width=2, dash="dash"),
+                    line=dict(color="gray", width=3, dash="dash"),
                 )
                 fig_scatter.add_annotation(
-                    x=max_val*0.7, y=max_val*0.8,
-                    text="No Change Line",
+                    x=max_val*0.5, y=max_val*0.6,
+                    text="No Change Line<br>(points above = growth)",
                     showarrow=False,
-                    font=dict(color="gray")
+                    font=dict(color="gray", size=12),
+                    bgcolor="rgba(255,255,255,0.8)"
+                )
+                
+                # Improve marker visibility
+                fig_scatter.update_traces(
+                    marker=dict(
+                        sizemin=8,
+                        sizemax=40,
+                        line=dict(width=2, color='white'),
+                        opacity=0.8
+                    )
+                )
+                
+                # Better layout
+                fig_scatter.update_layout(
+                    plot_bgcolor='rgba(240,240,240,0.3)',
+                    showlegend=True
                 )
                 
                 st.plotly_chart(fig_scatter, use_container_width=True)
             
-            # Enhanced Entity Type Performance with treemap
+            # Enhanced Entity Type Performance with toggleable metrics
             if len(filtered_df['Entity_Type'].unique()) > 1:
                 entity_type_detailed = filtered_df.groupby('Entity_Type').agg({
                     'Current_Clicks': 'sum',
                     'Previous_Clicks': 'sum',
                     'Current_Impressions': 'sum',
                     'Previous_Impressions': 'sum',
-                    'Clicks_Absolute_Change': 'sum',
+                    'Performance_Score': 'mean',
                     'Entity': 'count'
                 }).reset_index()
-                entity_type_detailed.columns = ['Entity_Type', 'Total_Current_Clicks', 'Total_Previous_Clicks', 'Total_Current_Impressions', 'Total_Previous_Impressions', 'Total_Click_Change', 'Entity_Count']
+                entity_type_detailed.columns = ['Entity_Type', 'Total_Current_Clicks', 'Total_Previous_Clicks', 'Total_Current_Impressions', 'Total_Previous_Impressions', 'Avg_Performance_Score', 'Entity_Count']
                 
-                # Calculate impressions change
+                # Calculate changes for all metrics
+                entity_type_detailed['Total_Click_Change'] = entity_type_detailed['Total_Current_Clicks'] - entity_type_detailed['Total_Previous_Clicks']
                 entity_type_detailed['Total_Impressions_Change'] = entity_type_detailed['Total_Current_Impressions'] - entity_type_detailed['Total_Previous_Impressions']
                 
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # Treemap showing entity types by current volume and colored by absolute change
+                    # Treemap (keep as clicks-focused)
                     fig_treemap = px.treemap(
                         entity_type_detailed,
                         path=['Entity_Type'],
                         values='Total_Current_Clicks',
                         color='Total_Click_Change',
-                        title="Entity Types by Current Traffic Volume<br><sub>Size = Current Clicks, Color = Total Change</sub>",
-                        color_continuous_scale=['red', 'yellow', 'green'],
+                        title="Entity Types by Current Traffic Volume<br><sub>Size = Current Clicks, Color = Total Click Change</sub>",
+                        color_continuous_scale=['#DC143C', '#FFA500', '#FFD700', '#ADFF2F', '#2E8B57'],
                         hover_data={
                             'Entity_Count': True,
                             'Total_Click_Change': ':+,',
@@ -1051,19 +1140,33 @@ def create_entity_performance_dashboard():
                     st.plotly_chart(fig_treemap, use_container_width=True)
                 
                 with col2:
-                    # Bar chart showing absolute change by entity type
+                    # Dynamic bar chart based on selected metric
+                    if bar_metric == "Clicks":
+                        metric_col = 'Total_Click_Change'
+                        title_text = "Total Click Change by Entity Type"
+                        color_col = 'Total_Click_Change'
+                    elif bar_metric == "Impressions":
+                        metric_col = 'Total_Impressions_Change'
+                        title_text = "Total Impression Change by Entity Type"
+                        color_col = 'Total_Impressions_Change'
+                    else:  # Performance Score
+                        metric_col = 'Avg_Performance_Score'
+                        title_text = "Average Performance Score by Entity Type"
+                        color_col = 'Avg_Performance_Score'
+                    
                     fig_bar = px.bar(
-                        entity_type_detailed.sort_values('Total_Click_Change', ascending=True),
-                        x='Total_Click_Change',
+                        entity_type_detailed.sort_values(metric_col, ascending=True),
+                        x=metric_col,
                         y='Entity_Type',
                         orientation='h',
-                        title="Total Click Change by Entity Type<br><sub>Absolute numbers show real impact</sub>",
-                        color='Total_Click_Change',
-                        color_continuous_scale=['red', 'yellow', 'green'],
+                        title=f"{title_text}<br><sub>Showing {bar_metric.lower()} performance</sub>",
+                        color=color_col,
+                        color_continuous_scale=['#DC143C', '#FFA500', '#FFD700', '#ADFF2F', '#2E8B57'],
                         hover_data={
                             'Entity_Count': True,
                             'Total_Current_Clicks': ':,',
                             'Total_Previous_Clicks': ':,',
+                            'Total_Click_Change': ':+,',
                             'Total_Impressions_Change': ':+,'
                         }
                     )
@@ -1071,11 +1174,12 @@ def create_entity_performance_dashboard():
                     fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
                     fig_bar.update_traces(
                         hovertemplate='<b>%{y}</b><br>' +
-                                    'Click Change: %{x:+,}<br>' +
+                                    f'{bar_metric} Metric: %{{x:+,.0f}}<br>' +
                                     'Current Clicks: %{customdata[1]:,}<br>' +
                                     'Previous Clicks: %{customdata[2]:,}<br>' +
+                                    'Click Change: %{customdata[3]:+,}<br>' +
                                     'Entities: %{customdata[0]}<br>' +
-                                    'Impressions Change: %{customdata[3]:+,}<br>' +
+                                    'Impressions Change: %{customdata[4]:+,}<br>' +
                                     '<extra></extra>'
                     )
                     st.plotly_chart(fig_bar, use_container_width=True)

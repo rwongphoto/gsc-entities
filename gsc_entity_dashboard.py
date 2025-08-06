@@ -411,18 +411,24 @@ class GSCEntityAnalyzer:
             
             # Calculate changes for each metric
             changes = {}
+            
+            # FIRST: Detect if years are swapped by checking clicks (most reliable indicator)
+            current_clicks = pivot_data['Clicks'].loc[entity, current_year]
+            previous_clicks = pivot_data['Clicks'].loc[entity, previous_year]
+            years_are_swapped = current_clicks < previous_clicks
+            
             for metric in metrics:
                 # Get the values from pivot table
-                current_val = pivot_data[metric].loc[entity, current_year]
-                previous_val = pivot_data[metric].loc[entity, previous_year]
+                raw_current_val = pivot_data[metric].loc[entity, current_year]
+                raw_previous_val = pivot_data[metric].loc[entity, previous_year]
                 
-                # HARD FIX: Based on your data, if current_val < previous_val, the years are swapped
-                # Your 2025 file has MORE clicks than 2024, so current should be higher
-                if metric == 'Clicks' and current_val < previous_val:
-                    # Swap the values to fix the backwards assignment
-                    temp = current_val
-                    current_val = previous_val
-                    previous_val = temp
+                # Apply the same swap logic to ALL metrics if years are detected as swapped
+                if years_are_swapped:
+                    current_val = raw_previous_val  # Use the "previous" column as current
+                    previous_val = raw_current_val  # Use the "current" column as previous
+                else:
+                    current_val = raw_current_val
+                    previous_val = raw_previous_val
                 
                 if metric == 'Position':
                     # For position, negative change means improvement (lower position number is better)
@@ -483,7 +489,7 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
-    st.markdown("**🔄 Code Version: 5.0 - HARD FIX for YOY Calculation Swap**")
+    st.markdown("**🔄 Code Version: 6.0 - Fixed ALL Metrics (Clicks, Impressions, CTR, Position)**")
     
     st.markdown("""
     **Performance Optimizations:**
@@ -587,11 +593,6 @@ def create_entity_performance_dashboard():
             
             # Load data
             with st.spinner("Loading GSC data..."):
-                # DEBUG: Show which file is being assigned to which year
-                st.write("🔍 **File Upload Assignment Debug:**")
-                st.write(f"- File uploaded to 'Current Year' slot: {current_file.name if current_file else 'None'}")
-                st.write(f"- File uploaded to 'Previous Year' slot: {previous_file.name if previous_file else 'None'}")
-                
                 current_df = analyzer.load_gsc_data(current_file, "Current Year")
                 previous_df = analyzer.load_gsc_data(previous_file, "Previous Year")
                 

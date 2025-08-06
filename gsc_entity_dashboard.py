@@ -500,18 +500,18 @@ def create_entity_performance_dashboard():
     
     st.title("🎯 GSC Entity Performance Dashboard")
     st.markdown("**Advanced Entity Analysis using Google Cloud NLP | by Richard Wong, The SEO Consultant.ai**")
-    st.markdown("**🔄 Code Version: 12.0 - TOTAL IMPACT FOCUS + ENHANCED DATA**")
+    st.markdown("**🔄 Code Version: 12.1 - TOTAL IMPACT SORTING + PERFORMANCE SCORE PRESERVED**")
     
     st.markdown("""
-    **🚀 MAJOR IMPROVEMENTS:**
+    **🚀 LATEST IMPROVEMENTS:**
     - ✅ **NEW**: Analysis Overview includes Overall CTR metric  
     - ✅ **ENHANCED**: Tables now include Previous/Current Impressions & CTR columns
-    - ✅ **CHANGED**: Sorting by absolute click changes (total impact) instead of percentages
-    - ✅ **ENHANCED**: Visualizations focus on total changes with comprehensive hover data
+    - ✅ **PRESERVED**: Performance Score kept in both tables as requested
+    - ✅ **CHANGED**: Sorting by absolute click changes (total impact) instead of Performance Score
+    - ✅ **ENHANCED**: All original visualizations preserved with total impact focus
     - ✅ **IMPROVED**: Winners vs Losers shows total click gains/losses in labels
-    - ✅ **ENHANCED**: Scatter plot sized by current clicks, colored by absolute change
-    - ✅ **IMPROVED**: Treemap and bar charts show absolute changes with full context in tooltips
-    - ✅ **FOCUS**: All metrics prioritize business impact over percentage changes
+    - ✅ **ENHANCED**: All charts show absolute changes with comprehensive hover data
+    - ✅ **FOCUS**: Prioritizes business impact while maintaining all original analysis features
     """)
 
     
@@ -804,16 +804,22 @@ def create_entity_performance_dashboard():
             # Calculate absolute click change for sorting by total impact
             filtered_df['Clicks_Absolute_Change'] = filtered_df['Current_Clicks'] - filtered_df['Previous_Clicks']
             
-            # Sort by highest absolute click increase (total impact)
+            # Sort by highest absolute click increase (total impact) but keep Performance Score
             top_performers = filtered_df.nlargest(15, 'Clicks_Absolute_Change')[
-                ['Entity', 'Entity_Type', 'Clicks_Absolute_Change', 'Previous_Clicks', 'Current_Clicks',
-                 'Previous_Impressions', 'Current_Impressions', 'Previous_CTR', 'Current_CTR', 'Clicks_Change_%']
+                ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Absolute_Change', 'Previous_Clicks', 'Current_Clicks',
+                 'Previous_Impressions', 'Current_Impressions', 'Previous_CTR', 'Current_CTR', 'Clicks_Change_%', 'Impressions_Change_%', 'CTR_Change_%']
             ].round(2)
             
             st.dataframe(
                 top_performers,
                 use_container_width=True,
                 column_config={
+                    "Performance_Score": st.column_config.ProgressColumn(
+                        "Performance Score",
+                        format="%.1f",
+                        min_value=-100,
+                        max_value=100,
+                    ),
                     "Clicks_Absolute_Change": st.column_config.NumberColumn(
                         "Total Click Gain",
                         format="%d",
@@ -823,6 +829,18 @@ def create_entity_performance_dashboard():
                         format="%.1f%%",
                         min_value=-100,
                         max_value=500,
+                    ),
+                    "Impressions_Change_%": st.column_config.ProgressColumn(
+                        "Impressions Change %",
+                        format="%.1f%%", 
+                        min_value=-100,
+                        max_value=500,
+                    ),
+                    "CTR_Change_%": st.column_config.ProgressColumn(
+                        "CTR Change %",
+                        format="%.1f%%",
+                        min_value=-100,
+                        max_value=200,
                     ),
                     "Previous_CTR": st.column_config.NumberColumn(
                         "Previous CTR",
@@ -844,14 +862,20 @@ def create_entity_performance_dashboard():
             declining_df = filtered_df[filtered_df['Clicks_Absolute_Change'] < 0]
             if len(declining_df) > 0:
                 declining = declining_df.nsmallest(15, 'Clicks_Absolute_Change')[
-                    ['Entity', 'Entity_Type', 'Clicks_Absolute_Change', 'Previous_Clicks', 'Current_Clicks',
-                     'Previous_Impressions', 'Current_Impressions', 'Previous_CTR', 'Current_CTR', 'Clicks_Change_%']
+                    ['Entity', 'Entity_Type', 'Performance_Score', 'Clicks_Absolute_Change', 'Previous_Clicks', 'Current_Clicks',
+                     'Previous_Impressions', 'Current_Impressions', 'Previous_CTR', 'Current_CTR', 'Clicks_Change_%', 'Impressions_Change_%', 'CTR_Change_%']
                 ].round(2)
                 
                 st.dataframe(
                     declining, 
                     use_container_width=True,
                     column_config={
+                        "Performance_Score": st.column_config.ProgressColumn(
+                            "Performance Score",
+                            format="%.1f",
+                            min_value=-100,
+                            max_value=0,
+                        ),
                         "Clicks_Absolute_Change": st.column_config.NumberColumn(
                             "Total Click Loss",
                             format="%d",
@@ -861,6 +885,18 @@ def create_entity_performance_dashboard():
                             format="%.1f%%",
                             min_value=-100,
                             max_value=100,
+                        ),
+                        "Impressions_Change_%": st.column_config.ProgressColumn(
+                            "Impressions Change %", 
+                            format="%.1f%%",
+                            min_value=-100,
+                            max_value=100,
+                        ),
+                        "CTR_Change_%": st.column_config.ProgressColumn(
+                            "CTR Change %",
+                            format="%.1f%%",
+                            min_value=-100,
+                            max_value=200,
                         ),
                         "Previous_CTR": st.column_config.NumberColumn(
                             "Previous CTR",
@@ -1130,4 +1166,3 @@ def create_entity_performance_dashboard():
 
 if __name__ == "__main__":
     create_entity_performance_dashboard()
-

@@ -330,20 +330,6 @@ class GSCEntityAnalyzer:
     def _categorize_query_fallback(self, query):
         """Fallback categorization when no entities are detected."""
         query_lower = query.lower()
-        
-        # Photography-specific categorizations
-        if any(term in query_lower for term in ['photographer', 'photography', 'photo']):
-            return {'entity_name': 'Photography', 'entity_type': 'OTHER', 'salience': 0.3, 'mentions': 1}
-        elif any(term in query_lower for term in ['gallery', 'museum', 'exhibition']):
-            return {'entity_name': 'Art Gallery', 'entity_type': 'LOCATION', 'salience': 0.3, 'mentions': 1}
-        elif any(term in query_lower for term in ['nature', 'landscape', 'wildlife']):
-            return {'entity_name': 'Nature Photography', 'entity_type': 'OTHER', 'salience': 0.3, 'mentions': 1}
-        elif 'how' in query_lower or 'tutorial' in query_lower:
-            return {'entity_name': 'Tutorial Content', 'entity_type': 'OTHER', 'salience': 0.2, 'mentions': 1}
-        elif 'best' in query_lower or 'top' in query_lower:
-            return {'entity_name': 'Comparison Query', 'entity_type': 'OTHER', 'salience': 0.2, 'mentions': 1}
-        else:
-            return {'entity_name': 'General Photography', 'entity_type': 'OTHER', 'salience': 0.1, 'mentions': 1}
     
     def aggregate_entity_performance(self, entity_df):
         """Aggregate performance metrics by entity and year."""
